@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🦸 Superman Voxel Simulator</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;font-family:'Segoe UI',Tahoma,sans-serif}
+canvas{display:block}
+
+/* ═══ HUD ═══ */
+#hud{position:fixed;top:20px;left:20px;pointer-events:none;z-index:10}
+.power-bar{display:flex;gap:8px;margin-bottom:10px}
+.power-slot{width:44px;height:44px;border-radius:8px;border:2px solid rgba(255,255,255,0.2);
+  background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
+  font-size:20px;transition:all .15s;cursor:pointer;pointer-events:auto}
+.power-slot.active{border-color:#ffd700;box-shadow:0 0 12px rgba(255,215,0,0.5);
+  transform:scale(1.1);background:rgba(255,215,0,0.15)}
+.power-slot .key{position:absolute;top:-8px;right:-8px;background:#333;color:#fff;
+  font-size:9px;padding:1px 4px;border-radius:3px;font-weight:700}
+
+/* ═══ Stats ═══ */
+#stats{position:fixed;top:20px;right:20px;text-align:right;pointer-events:none;z-index:10;
+  color:#fff;font-size:13px}
+#stats div{margin-bottom:5px;text-shadow:1px 1px 3px rgba(0,0,0,0.8)}
+#stats .label{color:#aaa;font-size:11px}
+#stats .val{font-size:16px;font-weight:700}
+
+/* ═══ Crosshair ═══ */
+#crosshair{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  pointer-events:none;z-index:10;color:rgba(255,255,255,0.6);font-size:24px;
+  text-shadow:0 0 6px rgba(255,255,255,0.3)}
+
+/* ═══ Power Indicator ═══ */
+#power-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+  pointer-events:none;z-index:10;text-align:center;opacity:0;transition:opacity .3s}
+#power-indicator.show{opacity:1}
+#power-indicator .name{font-size:22px;font-weight:700;text-shadow:2px 2px 8px rgba(0,0,0,0.8)}
+#power-indicator .desc{font-size:12px;color:#ccc;margin-top:4px}
+
+/* ═══ Start Overlay ═══ */
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;
+  align-items:center;justify-content:center;z-index:100;flex-direction:column;color:#fff}
+#overlay h1{font-size:48px;margin-bottom:10px;background:linear-gradient(135deg,#ffd700,#ff4444);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+#overlay p{color:#aaa;margin-bottom:30px;font-size:14px}
+#overlay .start-btn{padding:14px 40px;background:linear-gradient(135deg,#ffd700,#ff8c00);
+  border:none;border-radius:8px;font-size:18px;font-weight:700;color:#000;cursor:pointer;
+  transition:transform .15s}
+#overlay .start-btn:hover{transform:scale(1.05)}
+#overlay .controls{margin-top:30px;color:#888;font-size:12px;line-height:1.8;text-align:center}
+
+/* ═══ Mini Map ═══ */
+#minimap{position:fixed;bottom:20px;right:20px;width:120px;height:120px;
+  border:2px solid rgba(255,255,255,0.2);border-radius:8px;overflow:hidden;z-index:10;
+  background:rgba(0,0,0,0.6);pointer-events:none}
+#minimap canvas{width:100%;height:100%}
+
+/* ═══ Speed Lines ═══ */
+#speed-lines{position:fixed;inset:0;pointer-events:none;z-index:5;opacity:0;transition:opacity .3s}
+#speed-lines.show{opacity:1}
+#speed-lines::before,#speed-lines::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at center,transparent 50%,rgba(255,255,255,0.08) 100%)}
+</style>
+</head>
+<body>
+
+<!-- HUD -->
+<div id="hud">
+  <div class="power-bar">
+    <div class="power-slot active" data-power="default" title="Walk (Q)">🚶<span class="key">Q</span></div>
+    <div class="power-slot" data-power="laser" title="Laser (E)">🔴<span class="key">E</span></div>
+    <div class="power-slot" data-power="xray" title="X-Ray (R)">🔬<span class="key">R</span></div>
+  </div>
+</div>
+
+<!-- Stats -->
+<div id="stats">
+  <div><span class="label">ALTITUDE</span><br><span class="val" id="s-alt">0</span></div>
+  <div><span class="label">SPEED</span><br><span class="val" id="s-speed">0</span></div>
+  <div><span class="label">DESTROYED</span><br><span class="val" id="s-destroyed">0</span></div>
+</div>
+
+<!-- Crosshair -->
+<div id="crosshair">+</div>
+
+<!-- Power Indicator -->
+<div id="power-indicator">
+  <div class="name" id="pi-name"></div>
+  <div class="desc" id="pi-desc"></div>
+</div>
+
+<!-- Speed Lines -->
+<div id="speed-lines"></div>
+
+<!-- Start Overlay -->
+<div id="overlay">
+  <h1>🦸 SUPERMAN VOXEL</h1>
+  <p>Superman Simulator in a Minecraft World</p>
+  <button class="start-btn" id="startBtn">START GAME</button>
+  <div class="controls">
+    WASD — Move &nbsp;|&nbsp; Space — Up &nbsp;|&nbsp; Shift — Down<br>
+    Q — Walk &nbsp;|&nbsp; E — Laser &nbsp;|&nbsp; R — X-Ray<br>
+    Click — Activate Power &nbsp;|&nbsp; ESC — Pause
+  </div>
+</div>
+
+<!-- Minimap -->
+<div id="minimap"><canvas id="minimap-canvas" width="120" height="120"></canvas></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ═══════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════
+const CHUNK = 16;
+const WCX = 4, WCZ = 4;
+const WX = WCX * CHUNK, WZ = WCZ * CHUNK;
+const MAX_H = 32;
+
+// ═══════════════════════════════════════
+//  BLOCK TYPES
+// ═══════════════════════════════════════
+const BT = { AIR:0, GRASS:1, DIRT:2, STONE:3, IRON:4, WOOD:5, LEAF:6, SAND:7, WATER:8, DIAMOND:9, BEDROCK:10, SNOW:11 };
+const BC = {
+  [BT.GRASS]:  '#5b8731', [BT.DIRT]:    '#8b6914', [BT.STONE]:  '#888888',
+  [BT.IRON]:   '#b8a88a', [BT.WOOD]:    '#6b4226', [BT.LEAF]:   '#2d7a2d',
+  [BT.SAND]:   '#d4c078', [BT.WATER]:   '#3366aa', [BT.DIAMOND]:'#44eedd',
+  [BT.BEDROCK]:'#333333', [BT.SNOW]:    '#eef4f0'
+};
+const BLOCK_NAMES = {
+  [BT.GRASS]:'Grass', [BT.DIRT]:'Dirt', [BT.STONE]:'Stone', [BT.IRON]:'Iron',
+  [BT.WOOD]:'Wood', [BT.LEAF]:'Leaf', [BT.SAND]:'Sand', [BT.WATER]:'Water',
+  [BT.DIAMOND]:'Diamond', [BT.BEDROCK]:'Bedrock', [BT.SNOW]:'Snow'
+};
+
+// ═══════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════
+const S = {
+  power: 'default', laserActive: false, xrayActive: false,
+  destroyed: 0, flySpeed: 0, alt: 0, paused: true,
+  keys: {}, mouseX: 0, mouseY: 0, yaw: 0, pitch: 0,
+  camDist: 8, camAngle: 0, lastTime: 0, xrayBlocks: []
+};
+
+// ═══════════════════════════════════════
+//  NOISE
+// ═══════════════════════════════════════
+const P = new Uint8Array(512);
+for (let i = 0; i < 256; i++) P[i] = i;
+for (let i = 255; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [P[i],P[j]]=[P[j],P[i]]; }
+for (let i = 0; i < 256; i++) P[i+256] = P[i];
+
+function fade(t){return t*t*t*(t*(t*6-15)+10)}
+function grad(h,x,y){const v=h&3;return((v&1)?-x:x)+((v&2)?-y:y)}
+function noise2(x,y){
+  const X=Math.floor(x)&255,Y=Math.floor(y)&255;
+  const xf=x-Math.floor(x),yf=y-Math.floor(y);
+  const u=fade(xf),v=fade(yf);
+  const a=P[X]+Y,b=P[X+1]+Y;
+  return THREE.MathUtils.lerp(
+    THREE.MathUtils.lerp(grad(P[a],xf,yf),grad(P[b],xf-1,yf),u),
+    THREE.MathUtils.lerp(grad(P[a+1],xf,yf-1),grad(P[b+1],xf-1,yf-1),u),v
+  );
+}
+function fbm(x,y,oct=4){
+  let v=0,a=1,f=1,t=0;
+  for(let i=0;i<oct;i++){v+=a*noise2(x*f,y*f);t+=a;a*=0.5;f*=2;}
+  return v/t;
+}
+
+// ═══════════════════════════════════════
+//  BLOCK GEOMETRY (shared)
+// ═══════════════════════════════════════
+const geo = new THREE.BoxGeometry(1, 1, 1);
+
+// Spatial index for fast x-ray lookups (declared early for World.rebuild)
+const meshIdx = new Map();
+function idxKey(x,y,z){return x+','+y+','+z}
+function buildMeshIndex() {
+  meshIdx.clear();
+  scene.traverse(obj => {
+    if (obj.isMesh && obj.position) {
+      const k = idxKey(Math.floor(obj.position.x), Math.floor(obj.position.y), Math.floor(obj.position.z));
+      meshIdx.set(k, obj);
+    }
+  });
+}
+
+// ═══════════════════════════════════════
+//  CHUNK CLASS
+// ═══════════════════════════════════════
+class Chunk {
+  constructor(cx, cz) {
+    this.cx = cx; this.cz = cz;
+    this.blocks = new Uint8Array(CHUNK * MAX_H * CHUNK);
+    this.group = new THREE.Group();
+    this.meshes = {};      // blockType -> THREE.Mesh
+    this.blockMats = {};   // blockType -> cloned material
+    this.dirty = true;
+  }
+  idx(x, y, z) { return (y * CHUNK + z) * CHUNK + x; }
+  get(x, y, z) { return (x>=0 && x<CHUNK && y>=0 && y<MAX_H && z>=0 && z<CHUNK) ? this.blocks[this.idx(x,y,z)] : BT.AIR; }
+  set(x, y, z, v) { if (x>=0&&x<CHUNK&&y>=0&&y<MAX_H&&z>=0&&z<CHUNK) { this.blocks[this.idx(x,y,z)]=v; this.dirty=true; } }
+
+  buildMat(type) {
+    const m = new THREE.MeshLambertMaterial({ color: BC[type] });
+    if (type === BT.WATER) { m.transparent = true; m.opacity = 0.55; }
+    this.blockMats[type] = m;
+    return m;
+  }
+
+  build(scene) {
+    this.group.clear();
+    this.meshes = {};
+    for (let y = 0; y < MAX_H; y++)
+      for (let z = 0; z < CHUNK; z++)
+        for (let x = 0; x < CHUNK; x++) {
+          const t = this.get(x, y, z);
+          if (t === BT.AIR) continue;
+          // cull: skip fully hidden
+          if (this.get(x,y+1,z) && this.get(x,y-1,z) &&
+              this.get(x+1,y,z) && this.get(x-1,y,z) &&
+              this.get(x,y,z+1) && this.get(x,y,z-1)) continue;
+          if (!this.meshes[t]) {
+            const mat = this.blockMats[t] || this.buildMat(t);
+            this.meshes[t] = new THREE.Mesh(geo, mat);
+            this.meshes[t].castShadow = false;
+            this.meshes[t].receiveShadow = true;
+          }
+          const inst = this.meshes[t].clone();
+          inst.position.set(
+            this.cx * CHUNK + x + 0.5,
+            y + 0.5,
+            this.cz * CHUNK + z + 0.5
+          );
+          this.group.add(inst);
+        }
+    scene.add(this.group);
+    this.dirty = false;
+  }
+
+  dispose(scene) { this.group.clear(); scene.remove(this.group); }
+}
+
+// ═══════════════════════════════════════
+//  WORLD CLASS
+// ═══════════════════════════════════════
+class World {
+  constructor() { this.chunks = new Map(); }
+
+  key(cx,cz){return `${cx},${cz}`}
+
+  genTerrain(seed) {
+    const ox = seed * 137.3, oy = seed * 91.7;
+    for (let cz = 0; cz < WCZ; cz++)
+      for (let cx = 0; cx < WCX; cx++) {
+        const ch = new Chunk(cx, cz);
+        for (let z = 0; z < CHUNK; z++)
+          for (let x = 0; x < CHUNK; x++) {
+            const wx = cx*CHUNK+x, wz = cz*CHUNK+z;
+            const h = Math.floor(fbm((wx+ox)*0.018,(wz+oy)*0.018,5)*14+12);
+            ch.set(x, 0, z, BT.BEDROCK);
+            for (let y = 1; y < Math.min(h-3, MAX_H); y++) ch.set(x,y,z, BT.STONE);
+            for (let y = Math.max(1,h-3); y < h && y<MAX_H; y++) ch.set(x,y,z, BT.DIRT);
+            if (h > 0 && h < MAX_H) {
+              const top = h >= 24 ? BT.SNOW : (h < 10 ? BT.SAND : BT.GRASS);
+              ch.set(x, h, z, top);
+            }
+            // ores
+            if (h>4 && Math.random()<0.015) ch.set(x,Math.max(1,h-Math.floor(Math.random()*6)),z, BT.IRON);
+            if (h>8 && Math.random()<0.003) ch.set(x,Math.max(1,h-Math.floor(Math.random()*8)),z, BT.DIAMOND);
+            // trees
+            if (h>12 && h<24 && Math.random()<0.012) {
+              const th = 4+Math.floor(Math.random()*3);
+              for(let ty=1;ty<=th;ty++) if(h+ty<MAX_H) ch.set(x,h+ty,z,BT.WOOD);
+              for(let dz=-2;dz<=2;dz++) for(let dx=-2;dx<=2;dx++)
+                if(Math.abs(dx)+Math.abs(dz)<=3 && h+th+1<MAX_H)
+                  ch.set(x+dx,h+th+1,z+dz,BT.LEAF);
+            }
+          }
+        this.chunks.set(this.key(cx,cz), ch);
+      }
+  }
+
+  buildAll(scene) { for (const ch of this.chunks.values()) ch.build(scene); }
+
+  // World coords -> chunk + local
+  resolve(wx, wy, wz) {
+    const cx=Math.floor(wx/CHUNK), cz=Math.floor(wz/CHUNK);
+    const ch=this.chunks.get(this.key(cx,cz));
+    if(!ch) return null;
+    const lx=wx-cx*CHUNK, lz=wz-cz*CHUNK;
+    return {ch, lx:Math.floor(lx), ly:Math.floor(wy), lz:Math.floor(lz)};
+  }
+
+  getBlock(wx,wy,wz) {
+    const r=this.resolve(wx,wy,wz);
+    return r ? r.ch.get(r.lx,r.ly,r.lz) : BT.AIR;
+  }
+
+  setBlock(wx,wy,wz,t) {
+    const r=this.resolve(wx,wy,wz);
+    if(r){r.ch.set(r.lx,r.ly,r.lz,t); this.rebuild(r.ch);}
+  }
+
+  destroyBlock(wx,wy,wz) {
+    const b=this.getBlock(wx,wy,wz);
+    if(b && b!==BT.BEDROCK){this.setBlock(wx,wy,wz,BT.AIR); S.destroyed++; return b;}
+    return BT.AIR;
+  }
+
+  rebuild(ch) {
+    const scene = ch.group.parent;
+    if(scene) ch.dispose(scene);
+    ch.build(scene || {add(){}});
+    buildMeshIndex(); // update spatial index after rebuild
+  }
+
+  // X-ray: find blocks in sphere
+  findInSphere(px,py,pz,r) {
+    const found=[];
+    const minB={x:Math.floor(px-r),y:Math.max(0,Math.floor(py-r)),z:Math.floor(pz-r)};
+    const maxB={x:Math.ceil(px+r),y:Math.min(MAX_H,Math.ceil(py+r)),z:Math.ceil(pz+r)};
+    for(let z=minB.z;z<=maxB.z;z++) for(let y=minB.y;y<=maxB.y;y++) for(let x=minB.x;x<=maxB.x;x++){
+      if((x-px)**2+(y-py)**2+(z-pz)**2<=r*r){
+        const b=this.getBlock(x,y,z);
+        if(b && b!==BT.AIR) found.push({x,y,z,type:b});
+      }
+    }
+    return found;
+  }
+
+  // Collision check
+  collides(px,py,pz,r=0.3){
+    const minX=Math.floor(px-r),maxX=Math.floor(px+r);
+    const minY=Math.floor(py-1.5),maxY=Math.floor(py+0.2);
+    const minZ=Math.floor(pz-r),maxZ=Math.floor(pz+r);
+    for(let z=minZ;z<=maxZ;z++) for(let y=minY;y<=maxY;y++) for(let x=minX;x<=maxX;x++){
+      const b=this.getBlock(x,y,z);
+      if(b && b!==BT.AIR && b!==BT.WATER){
+        // AABB overlap
+        if(px+r>x && px-r<x+1 && py-1.5<y+1 && py+0.2>y && pz+r>z && pz-r<z+1) return true;
+      }
+    }
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════
+//  PLAYER
+// ═══════════════════════════════════════
+function createPlayer() {
+  const g = new THREE.Group();
+  // Body
+  const body = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:0x2244aa}));
+  body.scale.set(0.6,0.9,0.35); body.position.y=0.75; g.add(body);
+  // Head
+  const head = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:0xddbb88}));
+  head.scale.set(0.4,0.4,0.4); head.position.y=1.45; g.add(head);
+  // Cape
+  const cape = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:0xdd2222}));
+  cape.scale.set(0.5,0.8,0.08); cape.position.set(0,0.8,-0.22); g.add(cape);
+  g.userData.cape = cape;
+  // Boots
+  for(const s of [-1,1]){
+    const boot=new THREE.Mesh(geo,new THREE.MeshLambertMaterial({color:0xdd2222}));
+    boot.scale.set(0.22,0.22,0.32); boot.position.set(s*0.18,0.11,0); g.add(boot);
+  }
+  // S emblem on chest
+  const emblem = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:0xddaa00}));
+  emblem.scale.set(0.2,0.2,0.02); emblem.position.set(0,0.85,0.18); g.add(emblem);
+  return g;
+}
+
+// ═══════════════════════════════════════
+//  MAIN GAME
+// ═══════════════════════════════════════
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 30, 90);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+// Lights
+const ambLight = new THREE.AmbientLight(0x6688aa, 0.6); scene.add(ambLight);
+const sunLight = new THREE.DirectionalLight(0xfff4d0, 1.0);
+sunLight.position.set(40,60,30); sunLight.castShadow=true;
+sunLight.shadow.camera.near=0.5; sunLight.shadow.camera.far=150;
+sunLight.shadow.camera.left=-60; sunLight.shadow.camera.right=60;
+sunLight.shadow.camera.top=60; sunLight.shadow.camera.bottom=-60;
+sunLight.shadow.mapSize.set(2048,2048); scene.add(sunLight);
+const hemi = new THREE.HemisphereLight(0x88bbff, 0x445522, 0.3); scene.add(hemi);
+
+// World
+const world = new World();
+const seed = Math.random() * 10000;
+world.genTerrain(seed);
+world.buildAll(scene);
+buildMeshIndex(); // build spatial index after initial world
+
+// Player
+const player = createPlayer();
+player.position.set(WX/2 + 0.5, 20, WZ/2 + 0.5);
+scene.add(player);
+
+// Laser beam
+const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
+const laserMat = new THREE.LineBasicMaterial({color:0xff0000, linewidth:2});
+const laserLine = new THREE.Line(laserGeo, laserMat);
+laserLine.visible = false;
+scene.add(laserLine);
+
+// Laser glow (cylinder)
+const glowGeo = new THREE.CylinderGeometry(0.02,0.02,1,6);
+glowGeo.rotateX(Math.PI/2);
+const glowMat = new THREE.MeshBasicMaterial({color:0xff2200, transparent:true, opacity:0.4});
+const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+glowMesh.visible = false;
+scene.add(glowMesh);
+
+// Hit flash
+const hitGeo = new THREE.SphereGeometry(0.3,8,8);
+const hitMat = new THREE.MeshBasicMaterial({color:0xff4400, transparent:true, opacity:0.8});
+const hitFlash = new THREE.Mesh(hitGeo, hitMat);
+hitFlash.visible = false;
+scene.add(hitFlash);
+
+// ═══════════════════════════════════════
+//  CONTROLS
+// ═══════════════════════════════════════
+let locked = false;
+
+function lockPointer() {
+  renderer.domElement.requestPointerLock();
+}
+document.addEventListener('pointerlockchange', () => {
+  locked = !!document.pointerLockElement;
+  if (locked) S.paused = false;
+});
+document.addEventListener('mousemove', e => {
+  if (!locked) return;
+  S.yaw += e.movementX * 0.002;
+  S.pitch += e.movementY * 0.002;
+  S.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, S.pitch));
+});
+document.addEventListener('keydown', e => {
+  S.keys[e.code] = true;
+  if (e.code === 'KeyQ') setPower('default');
+  if (e.code === 'KeyE') setPower('laser');
+  if (e.code === 'KeyR') setPower('xray');
+});
+document.addEventListener('keyup', e => S.keys[e.code] = false);
+document.addEventListener('mousedown', e => {
+  if (!locked) return;
+  if (S.power === 'laser') fireLaser();
+  if (S.power === 'xray') toggleXray();
+});
+document.addEventListener('wheel', e => {
+  S.camDist = Math.max(3, Math.min(20, S.camDist + e.deltaY * 0.01));
+});
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Power slots click
+document.querySelectorAll('.power-slot').forEach(el => {
+  el.addEventListener('click', () => setPower(el.dataset.power));
+});
+
+// ═══════════════════════════════════════
+//  POWER SYSTEM
+// ═══════════════════════════════════════
+const PDATA = {
+  default: {name:'Walk Mode',desc:'Free walk and fly',emoji:'🚶'},
+  laser:   {name:'Laser Eyes 👁️',desc:'Left click to fire — destroys blocks',emoji:'🔴'},
+  xray:    {name:'X-Ray Vision 🔬',desc:'Left click — see through blocks',emoji:'🔬'}
+};
+
+function setPower(p) {
+  S.power = p;
+  document.querySelectorAll('.power-slot').forEach(el => {
+    el.classList.toggle('active', el.dataset.power === p);
+  });
+  const d = PDATA[p];
+  document.getElementById('pi-name').textContent = d.emoji + ' ' + d.name;
+  document.getElementById('pi-desc').textContent = d.desc;
+  const ind = document.getElementById('power-indicator');
+  ind.classList.add('show');
+  clearTimeout(ind._t);
+  ind._t = setTimeout(() => ind.classList.remove('show'), 2000);
+
+  // Toggle xray mode
+  if (p !== 'xray' && S.xrayActive) disableXray();
+}
+
+// ═══════════════════════════════════════
+//  LASER
+// ═══════════════════════════════════════
+const _ray = new THREE.Raycaster();
+const _dir = new THREE.Vector3();
+const _forward = new THREE.Vector3();
+
+function fireLaser() {
+  if (S.laserActive) return;
+  S.laserActive = true;
+
+  // Direction from player
+  _forward.set(0, 0, -1).applyEuler(new THREE.Euler(S.pitch, S.yaw, 0, 'YXZ'));
+  _ray.set(player.position.clone().add(new THREE.Vector3(0,1.2,0)), _forward);
+  _ray.far = 50;
+
+  const hits = _ray.intersectObjects(scene.children, true);
+  let hitPos = null;
+  let hitBlock = null;
+
+  if (hits.length > 0) {
+    const hit = hits[0];
+    hitPos = hit.point.clone().sub(_forward.clone().multiplyScalar(0.5));
+    const bx = Math.floor(hitPos.x), by = Math.floor(hitPos.y), bz = Math.floor(hitPos.z);
+    const destroyed = world.destroyBlock(bx, by, bz);
+    if (destroyed !== BT.AIR) {
+      hitBlock = {x:bx, y:by, z:bz};
+    }
+  }
+
+  // Visual: beam line
+  const start = player.position.clone().add(new THREE.Vector3(0,1.2,0));
+  const end = hitPos || start.clone().add(_forward.clone().multiplyScalar(50));
+  const pts = [start, end];
+  laserGeo.setFromPoints(pts);
+  laserLine.visible = true;
+
+  // Glow cylinder
+  const mid = start.clone().add(end).multiplyScalar(0.5);
+  const len = start.distanceTo(end);
+  glowMesh.position.copy(mid);
+  glowMesh.lookAt(end);
+  glowMesh.scale.set(1,1,len);
+  glowMesh.visible = true;
+
+  // Hit flash
+  if (hitBlock) {
+    hitFlash.position.set(hitBlock.x+0.5, hitBlock.y+0.5, hitBlock.z+0.5);
+    hitFlash.visible = true;
+    setTimeout(() => hitFlash.visible = false, 150);
+  }
+
+  // Remove beam after delay
+  setTimeout(() => {
+    laserLine.visible = false;
+    glowMesh.visible = false;
+    S.laserActive = false;
+  }, 120);
+}
+
+// ═══════════════════════════════════════
+//  X-RAY — fast spatial index
+// ═══════════════════════════════════════
+const xrayMats = new Map();
+
+function getXrayMat(type) {
+  if (!xrayMats.has(type)) {
+    const c = new THREE.Color(BC[type]);
+    const m = new THREE.MeshBasicMaterial({
+      color: c, transparent: true, opacity: 0.15, depthWrite: false
+    });
+    xrayMats.set(type, m);
+  }
+  return xrayMats.get(type);
+}
+
+function enableXray() {
+  S.xrayActive = true;
+  buildMeshIndex(); // rebuild once
+  const r = 12;
+  const px = Math.floor(player.position.x);
+  const py = Math.floor(player.position.y);
+  const pz = Math.floor(player.position.z);
+  S.xrayBlocks = world.findInSphere(px, py, pz, r);
+  for (const b of S.xrayBlocks) {
+    const m = meshIdx.get(idxKey(b.x, b.y, b.z));
+    if (m) { m.material = getXrayMat(b.type); m.userData._origMat = m.material; }
+  }
+  document.getElementById('crosshair').style.color = 'rgba(0,255,200,0.8)';
+}
+
+function disableXray() {
+  S.xrayActive = false;
+  for (const b of S.xrayBlocks) {
+    const m = meshIdx.get(idxKey(b.x, b.y, b.z));
+    if (m) {
+      const ch = world.chunks.get(world.key(Math.floor(b.x/CHUNK), Math.floor(b.z/CHUNK)));
+      if (ch && ch.blockMats[b.type]) m.material = ch.blockMats[b.type];
+    }
+  }
+  S.xrayBlocks = [];
+  document.getElementById('crosshair').style.color = 'rgba(255,255,255,0.6)';
+}
+
+function toggleXray() {
+  if (S.xrayActive) disableXray();
+  else enableXray();
+}
+
+// ═══════════════════════════════════════
+//  INPUT HELPERS
+// ═══════════════════════════════════════
+function isKey(c) { return !!S.keys[c]; }
+
+// ═══════════════════════════════════════
+//  UPDATE LOOP
+// ═══════════════════════════════════════
+function updatePlayer(dt) {
+  if (S.paused) return;
+
+  const euler = new THREE.Euler(S.pitch, S.yaw, 0, 'YXZ');
+  const forward = new THREE.Vector3(0, 0, -1).applyEuler(euler);
+  const right = new THREE.Vector3(1, 0, 0).applyEuler(euler);
+
+  let speed = isKey('ControlLeft') || isKey('ControlRight') ? 30 : 15;
+  const mv = new THREE.Vector3();
+
+  if (isKey('KeyW')) mv.add(forward);
+  if (isKey('KeyS')) mv.sub(forward);
+  if (isKey('KeyD')) mv.add(right);
+  if (isKey('KeyA')) mv.sub(right);
+
+  if (mv.lengthSq() > 0) {
+    mv.normalize().multiplyScalar(speed * dt);
+    S.flySpeed = speed;
+  } else {
+    S.flySpeed = 0;
+  }
+
+  // Vertical
+  if (isKey('Space')) mv.y += 12 * dt;
+  if (isKey('ShiftLeft') || isKey('ShiftRight')) mv.y -= 12 * dt;
+
+  // Apply movement with collision
+  const newPos = player.position.clone().add(mv);
+  // Check X
+  if (!world.collides(newPos.x, player.position.y, player.position.z)) player.position.x = newPos.x;
+  // Check Z
+  if (!world.collides(player.position.x, player.position.y, newPos.z)) player.position.z = newPos.z;
+  // Check Y
+  if (!world.collides(player.position.x, newPos.y, player.position.z)) player.position.y = newPos.y;
+
+  // Clamp above ground
+  if (player.position.y < 2) player.position.y = 2;
+
+  S.alt = Math.max(0, Math.floor(player.position.y - 1));
+
+  // Rotate player to face camera direction
+  player.rotation.y = S.yaw + Math.PI;
+
+  // Cape flutter
+  const cape = player.userData.cape;
+  if (cape) {
+    const flutter = Math.sin(performance.now() * 0.008) * 0.1;
+    cape.rotation.x = isKey('Space') ? 0.4 : (S.flySpeed > 0 ? 0.25 : flutter);
+  }
+}
+
+function updateCamera() {
+  const offset = new THREE.Vector3(
+    Math.sin(S.yaw) * Math.cos(S.pitch) * S.camDist,
+    Math.sin(S.pitch) * S.camDist + 2,
+    Math.cos(S.yaw) * Math.cos(S.pitch) * S.camDist
+  );
+  camera.position.copy(player.position).add(offset);
+  camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+}
+
+function updateHUD() {
+  document.getElementById('s-alt').textContent = S.alt;
+  document.getElementById('s-speed').textContent = Math.floor(S.flySpeed);
+  document.getElementById('s-destroyed').textContent = S.destroyed;
+
+  // Speed lines
+  const sl = document.getElementById('speed-lines');
+  sl.classList.toggle('show', S.flySpeed > 20);
+}
+
+// Minimap
+const mmCtx = document.getElementById('minimap-canvas').getContext('2d');
+function updateMinimap() {
+  const size = 120, scale = 2;
+  mmCtx.fillStyle = '#111';
+  mmCtx.fillRect(0, 0, size, size);
+  const px = Math.floor(player.position.x);
+  const pz = Math.floor(player.position.z);
+  const half = Math.floor(size / scale / 2);
+
+  for (let dz = -half; dz < half; dz++)
+    for (let dx = -half; dx < half; dx++) {
+      const wx = px + dx, wz = pz + dz;
+      // Find top block
+      let top = BT.AIR;
+      for (let y = MAX_H-1; y >= 0; y--) {
+        const b = world.getBlock(wx, y, wz);
+        if (b && b !== BT.AIR) { top = b; break; }
+      }
+      if (top !== BT.AIR) {
+        mmCtx.fillStyle = BC[top] || '#555';
+        mmCtx.fillRect((dx+half)*scale, (dz+half)*scale, scale, scale);
+      }
+    }
+
+  // Player dot
+  mmCtx.fillStyle = '#ff0';
+  mmCtx.fillRect(half*scale-1, half*scale-1, 4, 4);
+
+  // Direction arrow
+  const ax = Math.sin(S.yaw) * 6;
+  const az = Math.cos(S.yaw) * 6;
+  mmCtx.strokeStyle = '#ff0';
+  mmCtx.lineWidth = 2;
+  mmCtx.beginPath();
+  mmCtx.moveTo(half*scale+1, half*scale+1);
+  mmCtx.lineTo(half*scale+1+ax, half*scale+1+az);
+  mmCtx.stroke();
+}
+
+// ═══════════════════════════════════════
+//  GAME LOOP
+// ═══════════════════════════════════════
+let frameCount = 0;
+function animate(time) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((time - (S.lastTime||time)) / 1000, 0.05);
+  S.lastTime = time;
+
+  updatePlayer(dt);
+  updateCamera();
+  renderer.render(scene, camera);
+
+  frameCount++;
+  if (frameCount % 5 === 0) updateHUD();
+  if (frameCount % 15 === 0) updateMinimap();
+}
+
+// ═══════════════════════════════════════
+//  START
+// ═══════════════════════════════════════
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('overlay').style.display = 'none';
+  lockPointer();
+  animate(performance.now());
+});
+
+// Click canvas to re-lock
+renderer.domElement.addEventListener('click', () => {
+  if (!locked && document.getElementById('overlay').style.display === 'none') {
+    lockPointer();
+  }
+});
+
+</script>
+</body>
+</html>
