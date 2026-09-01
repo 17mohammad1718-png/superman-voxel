@@ -89,6 +89,24 @@ canvas{display:block}
 #speed-lines.show{opacity:1}
 #speed-lines::before,#speed-lines::after{content:'';position:absolute;inset:0;
   background:radial-gradient(ellipse at center,transparent 50%,rgba(255,255,255,0.08) 100%)}
+
+/* ═══ Pause Menu ═══ */
+#pause-menu{position:fixed;inset:0;background:rgba(0,0,0,0.72);display:none;
+  align-items:center;justify-content:center;z-index:90;color:#fff;backdrop-filter:blur(3px)}
+#pause-menu .pm-card{background:rgba(20,24,34,0.92);border:1px solid rgba(255,255,255,0.12);
+  border-radius:14px;padding:26px 30px;min-width:300px;text-align:center}
+#pause-menu h2{font-size:26px;margin-bottom:14px;color:#ffd700}
+#pause-menu button{display:block;width:100%;margin:8px 0;padding:11px;border:0;border-radius:8px;
+  font-size:15px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#ffd700,#ff8c00);color:#000;
+  transition:transform .12s}
+#pause-menu button:hover{transform:scale(1.03)}
+#pause-menu .pm-settings{margin:16px 0 6px;text-align:left;font-size:13px}
+#pause-menu .pm-row{display:flex;align-items:center;justify-content:space-between;
+  padding:7px 2px;border-bottom:1px solid rgba(255,255,255,0.08)}
+#pause-menu .pm-row label{color:#ccc}
+#pause-menu select,#pause-menu input[type=checkbox]{font-size:13px;background:#222;color:#fff;
+  border:1px solid rgba(255,255,255,0.2);border-radius:5px;padding:4px 6px;cursor:pointer}
+#pause-menu .danger{background:linear-gradient(135deg,#ff5555,#cc2222);color:#fff;margin-top:14px}
 </style>
 </head>
 <body>
@@ -117,6 +135,34 @@ canvas{display:block}
 </div>
 
 <div id="speed-lines"></div>
+
+<div id="pause-menu">
+  <div class="pm-card">
+    <h2>⏸ PAUSED</h2>
+    <button id="resumeBtn" type="button">RESUME</button>
+    <div class="pm-settings">
+      <div class="pm-row"><label for="opt-sound">Sound</label>
+        <input type="checkbox" id="opt-sound" checked></div>
+      <div class="pm-row"><label for="opt-shadows">Shadows</label>
+        <select id="opt-shadows">
+          <option value="off">Off</option>
+          <option value="low">Low</option>
+          <option value="high" selected>High</option>
+        </select></div>
+      <div class="pm-row"><label for="opt-res">Resolution</label>
+        <select id="opt-res">
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+        </select></div>
+      <div class="pm-row"><label for="opt-fog">View distance</label>
+        <select id="opt-fog">
+          <option value="near">Near</option>
+          <option value="far" selected>Far</option>
+        </select></div>
+    </div>
+    <button id="resetWorldBtn" type="button" class="danger">RESET WORLD</button>
+  </div>
+</div>
 
 <div id="overlay">
   <h1 id="overlay-title">🦸 SUPERMAN VOXEL</h1>
@@ -285,7 +331,10 @@ const DOM = {
   piName: $('pi-name'), piDesc: $('pi-desc'), indicator: $('power-indicator'),
   overlay: $('overlay'), startBtn: $('startBtn'), overlayTitle: $('overlay-title'),
   overlaySub: $('overlay-sub'), seedLabel: $('seed-label'), minimap: $('minimap-canvas'),
-  mode: $('s-mode'), error: $('error-box')
+  mode: $('s-mode'), error: $('error-box'),
+  pauseMenu: $('pause-menu'), resumeBtn: $('resumeBtn'),
+  optSound: $('opt-sound'), optShadows: $('opt-shadows'),
+  optRes: $('opt-res'), optFog: $('opt-fog'), resetWorldBtn: $('resetWorldBtn')
 };
 
 // ═══════════════════════════════════════
@@ -296,16 +345,27 @@ const S = {
   destroyed: 0, flySpeed: 0, alt: 0, paused: true, started: false,
   keys: {}, yaw: 0, pitch: 0, camDist: 8, lastTime: 0,
   flying: true, vy: 0, onGround: false,
-  fps: 0, fpsAccum: 0, fpsFrames: 0
+  fps: 0, fpsAccum: 0, fpsFrames: 0,
+  removed: [], saveAccum: 0
 };
 
 // ═══════════════════════════════════════
 //  SEED  (reproducible worlds via ?seed=1234)
+//  Priority: explicit ?seed in the URL → saved session's seed → random.
+//  Resuming the *saved* seed when no URL seed is given is what makes the
+//  localStorage persistence actually work across reloads (otherwise every
+//  reload would roll a fresh world and the save would never match).
 // ═══════════════════════════════════════
+const SAVE_KEY = 'superman-voxel.v1';
 const urlSeed = new URLSearchParams(location.search).get('seed');
+let savedSeed = null;
+try {
+  const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+  if (s && typeof s.seed === 'number') savedSeed = s.seed;
+} catch (e) { /* storage unavailable */ }
 const SEED = urlSeed !== null && urlSeed !== '' && !Number.isNaN(Number(urlSeed))
   ? (Number(urlSeed) >>> 0)
-  : (Math.random() * 0xffffffff) >>> 0;
+  : (savedSeed !== null ? savedSeed : (Math.random() * 0xffffffff) >>> 0);
 
 // Deterministic PRNG (mulberry32) — replaces Math.random() so a seed
 // fully reproduces a world.
@@ -379,6 +439,156 @@ function xrayMat(type) {
 // Single switch for the whole world — no per-mesh bookkeeping, so the old
 // "_origMat saved after it was already overwritten" bug cannot happen.
 function materialFor(type) { return S.xrayActive ? xrayMat(type) : solidMat(type); }
+
+// ═══════════════════════════════════════
+//  SOUND  —  procedural WebAudio (no external files)
+//  Browsers block audio until a user gesture, so the AudioContext is created
+//  lazily on the first pointerdown/keydown; every other call is a safe no-op
+//  until then.
+// ═══════════════════════════════════════
+const Sound = (() => {
+  let ctx = null, master = null, noiseBuf = null;
+  let whooshSrc = null, whooshGain = null;
+
+  function ensure() {
+    if (ctx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    try { ctx = new AC(); } catch (e) { return false; }
+    master = ctx.createGain();
+    master.gain.value = S.soundOn ? 0.5 : 0;
+    master.connect(ctx.destination);
+    return true;
+  }
+  function getNoise() {
+    if (!noiseBuf) {
+      noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.4), ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    return noiseBuf;
+  }
+  function pitchFor(type) {
+    switch (type) {
+      case BT.STONE: case BT.BEDROCK:            return 320;
+      case BT.DIRT: case BT.SAND: case BT.GRASS:
+      case BT.SNOW:                              return 520;
+      case BT.WOOD:                              return 720;
+      case BT.LEAF:                              return 1150;
+      case BT.IRON: case BT.DIAMOND:             return 880;
+      default:                                   return 600;
+    }
+  }
+
+  return {
+    unlock() {
+      if (!ensure()) return;
+      if (ctx.state === 'suspended') ctx.resume();
+    },
+    setEnabled(on) {
+      S.soundOn = on;
+      if (master) master.gain.setTargetAtTime(on ? 0.5 : 0, ctx.currentTime, 0.05);
+    },
+    laser() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(1700, t);
+      o.frequency.exponentialRampToValueAtTime(240, t + 0.12);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.22, t);
+      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+      o.connect(og).connect(master);
+      o.start(t); o.stop(t + 0.16);
+
+      const n = ctx.createBufferSource();
+      n.buffer = getNoise();
+      const f = ctx.createBiquadFilter();
+      f.type = 'highpass'; f.frequency.value = 1800;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.12, t);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+      n.connect(f).connect(ng).connect(master);
+      n.start(t); n.stop(t + 0.08);
+    },
+    breakBlock(type) {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const base = pitchFor(type);
+
+      const n = ctx.createBufferSource();
+      n.buffer = getNoise();
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = base * (0.9 + Math.random() * 0.25);
+      f.Q.value = 1.1;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.5, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      n.connect(f).connect(g).connect(master);
+      n.start(t); n.stop(t + 0.18);
+
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(base * 0.5, t);
+      o.frequency.exponentialRampToValueAtTime(60, t + 0.1);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.35, t);
+      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      o.connect(og).connect(master);
+      o.start(t); o.stop(t + 0.13);
+    },
+    jump() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(220, t);
+      o.frequency.exponentialRampToValueAtTime(520, t + 0.12);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      o.connect(g).connect(master);
+      o.start(t); o.stop(t + 0.15);
+    },
+    land() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(140, t);
+      o.frequency.exponentialRampToValueAtTime(50, t + 0.1);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.28, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      o.connect(g).connect(master);
+      o.start(t); o.stop(t + 0.13);
+    },
+    setWhoosh(level) {
+      if (!ctx) return;
+      const target = Math.max(0, Math.min(1, level));
+      if (target < 0.02) {
+        if (whooshGain) whooshGain.gain.setTargetAtTime(0, ctx.currentTime, 0.12);
+        return;
+      }
+      if (!whooshSrc) {
+        whooshSrc = ctx.createBufferSource();
+        whooshSrc.buffer = getNoise();
+        whooshSrc.loop = true;
+        const f = ctx.createBiquadFilter();
+        f.type = 'bandpass';
+        f.frequency.value = 900;
+        f.Q.value = 0.6;
+        whooshGain = ctx.createGain();
+        whooshGain.gain.value = 0;
+        whooshSrc.connect(f).connect(whooshGain).connect(master);
+        whooshSrc.start();
+      }
+      whooshGain.gain.setTargetAtTime(0.14 * target, ctx.currentTime, 0.15);
+    }
+  };
+})();
 
 // ═══════════════════════════════════════
 //  CHUNK  —  InstancedMesh based
@@ -501,9 +711,16 @@ class World {
   genTerrain() {
     const ox = (SEED % 1000) * 1.373, oy = (SEED % 997) * 0.917;
 
+    // Reuse existing chunk objects when present (fast world reset) instead of
+    // always allocating new ones — their groups are already attached to the scene.
     for (let cz = 0; cz < WCZ; cz++)
-      for (let cx = 0; cx < WCX; cx++)
-        this.chunks.set(this.key(cx,cz), new Chunk(cx,cz));
+      for (let cx = 0; cx < WCX; cx++) {
+        const k = this.key(cx, cz);
+        let ch = this.chunks.get(k);
+        if (!ch) { ch = new Chunk(cx, cz); this.chunks.set(k, ch); }
+        ch.blocks.fill(BT.AIR);
+        ch.dirty = true;
+      }
 
     const surface = new Int16Array(WX * WZ);
 
@@ -615,6 +832,21 @@ class World {
     const b = this.getBlock(wx, wy, wz);
     if (b !== BT.AIR && b !== BT.BEDROCK) { this.setBlock(wx, wy, wz, BT.AIR); S.destroyed++; return b; }
     return BT.AIR;
+  }
+
+  // Apply a saved delta of previously-destroyed blocks on top of the fresh,
+  // seed-generated world (the diff is tiny compared to full terrain storage).
+  applyRemoved(list) {
+    for (const r of list) this.setBlock(r[0], r[1], r[2], BT.AIR);
+    this.flushDirty(1000);
+  }
+
+  // Fast two-pass reset that reuses every chunk object, material and
+  // InstancedMesh — no scene teardown, no geometry reallocation.
+  resetWorld() {
+    this.genTerrain();
+    this.applyRemoved(S.removed);
+    this.rebuildHeightmap();
   }
 
   isSolid(wx, wy, wz) {
@@ -815,6 +1047,8 @@ function fireLaser() {
   if (hit) {
     const destroyed = world.destroyBlock(hit.x, hit.y, hit.z);
     if (destroyed !== BT.AIR) {
+      S.removed.push([hit.x, hit.y, hit.z]);
+      Sound.breakBlock(destroyed);
       hitFlash.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
       hitFlash.visible = true;
       hitFlash.userData.until = performance.now() + 130;
@@ -839,6 +1073,7 @@ let dragLook = false;
 
 function resumePlay() {
   S.started = true; S.paused = false; hideOverlay();
+  if (DOM.pauseMenu) DOM.pauseMenu.style.display = 'none';
   // `running`/`animate` are declared further down; reaching this before that
   // declaration is impossible (only click/lock events call it), so the hoisting is safe.
   if (!running) { running = true; requestAnimationFrame(animate); }   // the loop may never have started
@@ -891,8 +1126,8 @@ function flashNotice(text) {
 // player drifted forever.
 document.addEventListener('pointerlockchange', () => {
   locked = !!document.pointerLockElement;
-  if (locked) { S.paused = false; hideOverlay(); }
-  else if (S.started) { S.paused = true; clearKeys(); showOverlay('⏸ PAUSED', 'Click resume to keep playing'); }
+  if (locked) { S.paused = false; hideOverlay(); DOM.pauseMenu.style.display = 'none'; }
+  else if (S.started) { S.paused = true; clearKeys(); DOM.pauseMenu.style.display = 'flex'; }
 });
 window.addEventListener('blur', () => { S.paused = true; clearKeys(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { S.paused = true; clearKeys(); } });
@@ -916,6 +1151,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyF') { S.flying = !S.flying; S.vy = 0; }
 });
 document.addEventListener('keyup', e => { S.keys[e.code] = false; });
+document.addEventListener('keydown', () => Sound.unlock(), { once: true });
 
 let mouseDown = false;
 document.addEventListener('mousedown', () => {
@@ -969,7 +1205,7 @@ function updatePlayer(dt) {
     S.vy = 0;
   } else {
     // Walk mode now actually differs from fly mode: gravity + jumping.
-    if (S.onGround && isKey('Space')) S.vy = JUMP;
+    if (S.onGround && isKey('Space')) { S.vy = JUMP; Sound.jump(); }
     S.vy -= GRAVITY * dt;
     S.vy = Math.max(S.vy, -45);
     mv.y += S.vy * dt;
@@ -980,7 +1216,13 @@ function updatePlayer(dt) {
   if (!world.collides(nx, p.y, p.z)) p.x = nx;
   if (!world.collides(p.x, p.y, nz)) p.z = nz;
   if (!world.collides(p.x, ny, p.z)) { p.y = ny; S.onGround = false; }
-  else { if (S.vy < 0) S.onGround = true; S.vy = 0; }
+  else {
+    if (S.vy < 0) {
+      if (!S.onGround && !S.flying && S.vy < -7) Sound.land();
+      S.onGround = true;
+    }
+    S.vy = 0;
+  }
 
   p.x = Math.max(0.5, Math.min(WX - 0.5, p.x));
   p.z = Math.max(0.5, Math.min(WZ - 0.5, p.z));
@@ -1067,6 +1309,11 @@ function animate(time) {
       fireLaser();
       S.laserCooldown = LASER_RATE;
     }
+
+    // Flight whoosh scales with horizontal speed; throttle autosave to ~2Hz.
+    Sound.setWhoosh(S.flying ? S.flySpeed / 34 : 0);
+    S.saveAccum += dt;
+    if (S.saveAccum > 0.5) { S.saveAccum = 0; autosave(); }
   }
 
   const now = performance.now();
@@ -1085,6 +1332,131 @@ function animate(time) {
 // ═══════════════════════════════════════
 //  START
 // ═══════════════════════════════════════
+// ═══════════════════════════════════════
+//  PERSISTENCE  (localStorage)
+//  The world itself is fully derived from the seed, so saving the *diff* of
+//  destroyed blocks + the player's pose is enough to restore a session.
+//  Best-effort: storage may be unavailable (private mode / file://) — never throw.
+// ═══════════════════════════════════════
+function autosave() {
+  if (!S.started) return;
+  try {
+    const data = {
+      seed: SEED,
+      removed: S.removed,
+      player: [player.position.x, player.position.y, player.position.z, S.yaw, S.pitch],
+      flying: S.flying,
+      power: S.power,
+      destroyed: S.destroyed
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch (e) { /* storage unavailable */ }
+}
+
+function restore() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (e) { data = null; }
+  if (!data || data.seed !== SEED) return;
+  if (Array.isArray(data.removed)) {
+    world.applyRemoved(data.removed);
+    S.removed = data.removed;
+  }
+  S.destroyed = (typeof data.destroyed === 'number') ? data.destroyed : S.removed.length;
+  if (Array.isArray(data.player) && data.player.length >= 5) {
+    player.position.set(data.player[0], data.player[1], data.player[2]);
+    S.yaw = data.player[3]; S.pitch = data.player[4];
+  }
+  S.flying = data.flying !== false;
+  if (data.power && PDATA[data.power]) setPower(data.power);
+}
+
+// ═══════════════════════════════════════
+//  QUALITY SETTINGS  (persisted + live-applied)
+// ═══════════════════════════════════════
+const FOG_RANGES = { near: [22, 60], far: [40, 110] };
+const SHADOW_SIZES = { off: 0, low: 1024, high: 2048 };
+
+function applyShadowQuality(size) {
+  renderer.shadowMap.enabled = size > 0;
+  if (size > 0) {
+    sunLight.shadow.mapSize.set(size, size);
+    if (sunLight.shadow.map) {
+      sunLight.shadow.map.dispose();
+      sunLight.shadow.map = null;   // force reallocation at the new resolution
+    }
+  }
+}
+function applyResolution(px) {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, px));
+  renderer.setSize(innerWidth, innerHeight);
+}
+function applyFogQuality(key) {
+  const r = FOG_RANGES[key] || FOG_RANGES.far;
+  scene.fog.near = r[0];
+  scene.fog.far = r[1];
+  camera.far = r[1] + 40;
+  camera.updateProjectionMatrix();
+}
+function loadSettings() {
+  let g = {};
+  try { g = JSON.parse(localStorage.getItem(SAVE_KEY + '.settings') || '{}') || {}; } catch (e) { g = {}; }
+  S.soundOn = g.sound !== false;
+  const shadows = g.shadows || 'high';
+  const res = g.res || '2';
+  const fog = g.fog || 'far';
+  DOM.optSound.checked = S.soundOn;
+  DOM.optShadows.value = SHADOW_SIZES[shadows] === 0 ? 'off' : shadows;
+  DOM.optRes.value = res;
+  DOM.optFog.value = fog;
+  applyShadowQuality(SHADOW_SIZES[shadows]);
+  applyResolution(res === '1' ? 1 : 2);
+  applyFogQuality(fog);
+}
+function saveSettings() {
+  const g = {
+    sound: DOM.optSound.checked,
+    shadows: DOM.optShadows.value,
+    res: DOM.optRes.value,
+    fog: DOM.optFog.value
+  };
+  try { localStorage.setItem(SAVE_KEY + '.settings', JSON.stringify(g)); } catch (e) { /* storage unavailable */ }
+}
+
+DOM.optSound.addEventListener('change', () => {
+  S.soundOn = DOM.optSound.checked;
+  Sound.setEnabled(S.soundOn);
+  saveSettings();
+});
+DOM.optShadows.addEventListener('change', () => {
+  applyShadowQuality(SHADOW_SIZES[DOM.optShadows.value]);
+  saveSettings();
+});
+DOM.optRes.addEventListener('change', () => {
+  applyResolution(DOM.optRes.value === '1' ? 1 : 2);
+  saveSettings();
+});
+DOM.optFog.addEventListener('change', () => {
+  applyFogQuality(DOM.optFog.value);
+  saveSettings();
+});
+
+// ═══════════════════════════════════════
+//  PAUSE MENU
+// ═══════════════════════════════════════
+DOM.resumeBtn.addEventListener('click', () => {
+  if (S.started) lockPointer();
+  else { hideOverlay(); S.started = true; lockPointer(); }
+});
+DOM.resetWorldBtn.addEventListener('click', () => {
+  S.removed = [];
+  S.destroyed = 0;
+  world.resetWorld();
+  player.position.set(WX / 2 + 0.5, world.heightAt(WX >> 1, WZ >> 1) + 6, WZ / 2 + 0.5);
+  player.rotation.y = S.yaw + Math.PI;
+  flashNotice('🔄 World reset');
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage unavailable */ }
+});
+
 DOM.seedLabel.textContent = 'seed: ' + SEED;
 DOM.seedLabel.title = 'Share this world: ?seed=' + SEED;
 // Sharing has to work from file:// as well, where navigator.clipboard is absent
@@ -1121,9 +1493,12 @@ DOM.seedLabel.addEventListener('click', () => {
 DOM.startBtn.addEventListener('click', () => {
   hideOverlay();
   S.started = true;
+  Sound.unlock();
   lockPointer();
   if (!running) { running = true; requestAnimationFrame(animate); }
 });
+
+document.addEventListener('mousedown', () => Sound.unlock(), { once: true });
 
 renderer.domElement.addEventListener('click', () => {
   if (!locked && (S.started || dragLook)) lockPointer();
@@ -1131,6 +1506,8 @@ renderer.domElement.addEventListener('click', () => {
 
 setPower('default');
 DOM.indicator.classList.remove('show');
+restore();
+loadSettings();
 updateMinimap();
 renderer.render(scene, camera);
 window.__booted = true;   // first frame is on screen — the boot guard stands down
