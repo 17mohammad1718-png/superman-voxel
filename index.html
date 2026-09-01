@@ -118,13 +118,13 @@ canvas{display:block}
 
 <div id="error-box">
   <b>⚠️ Three.js failed to load</b>
-  This game loads Three.js from a CDN (unpkg.com).<br>
-  Check your internet connection or any blocker, then reload.
+  Three.js is bundled locally in <code>vendor/three.module.js</code>.<br>
+  Make sure the <code>vendor/</code> folder sits next to <code>index.html</code>, then reload.
 </div>
 
 <script>
-// If the module never runs (CDN blocked / offline), show a real message
-// instead of a silent black screen.
+// If the module never runs (missing vendor file, etc.), show a real
+// message instead of a silent black screen.
 window.__booted = false;
 setTimeout(() => {
   if (!window.__booted) document.getElementById('error-box').style.display = 'flex';
@@ -137,7 +137,8 @@ addEventListener('error', e => {
 </script>
 
 <script type="importmap">
-{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+// Three.js r160 is vendored locally (no CDN / internet needed).
+{ "imports": { "three": "./vendor/three.module.js" } }
 </script>
 
 <script type="module">
@@ -734,8 +735,10 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) { S.p
 
 document.addEventListener('mousemove', e => {
   if (!locked) return;
-  S.yaw   += e.movementX * 0.002;
-  S.pitch += e.movementY * 0.002;
+  // Standard FPS mapping: mouse right = look right, mouse up = look up
+  // (matches Three.js PointerLockControls convention).
+  S.yaw   -= e.movementX * 0.002;
+  S.pitch -= e.movementY * 0.002;
   S.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, S.pitch));
 });
 
@@ -833,7 +836,7 @@ function updatePlayer(dt) {
 function updateCamera() {
   const offset = new THREE.Vector3(
     Math.sin(S.yaw) * Math.cos(S.pitch) * S.camDist,
-    Math.sin(S.pitch) * S.camDist + 2,
+    -Math.sin(S.pitch) * S.camDist + 2, // camera below when looking up, above when looking down
     Math.cos(S.yaw) * Math.cos(S.pitch) * S.camDist
   );
   // Keep the camera out of terrain instead of clipping through hillsides.
