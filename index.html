@@ -60,7 +60,23 @@ canvas{display:block}
 #error-box{display:none;position:fixed;inset:0;z-index:200;background:#111;color:#f88;
   align-items:center;justify-content:center;flex-direction:column;text-align:center;
   font-family:monospace;padding:40px;line-height:1.9}
+#error-box .card{max-width:680px;direction:ltr;text-align:center;padding:28px 32px;
+  background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:12px}
 #error-box b{color:#ffd700;font-size:20px;display:block;margin-bottom:14px}
+#error-box #error-detail{font-size:13px;color:#e08c8c;text-align:left}
+#error-box code{background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;
+  color:#ffd9a0;word-break:break-all}
+#error-box .retry-btn{margin-top:22px;font-family:inherit;font-size:14px;font-weight:700;
+  letter-spacing:1px;cursor:pointer;background:#ffd700;color:#221100;border:0;border-radius:6px;
+  padding:10px 22px;transition:background .15s}
+#error-box .retry-btn:hover{background:#ffe14d}
+
+/* ═══ Toast (non-fatal advisories) ═══ */
+#notice{position:fixed;top:76px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;
+  background:rgba(0,0,0,0.72);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:8px;
+  padding:8px 16px;font-size:13px;text-align:center;opacity:0;transition:opacity .3s;
+  max-width:min(560px,86vw)}
+#notice.show{opacity:1}
 
 /* ═══ Mini Map ═══ */
 #minimap{position:fixed;bottom:20px;right:20px;width:120px;height:120px;
@@ -117,32 +133,119 @@ canvas{display:block}
 <div id="minimap"><canvas id="minimap-canvas" width="120" height="120"></canvas></div>
 
 <div id="error-box">
-  <b>⚠️ Three.js failed to load</b>
-  Three.js is bundled locally in <code>vendor/three.module.js</code>.<br>
-  Make sure the <code>vendor/</code> folder sits next to <code>index.html</code>, then reload.
+  <div class="card">
+    <b id="error-title">⚠️ Three.js failed to load</b>
+    <div id="error-detail"></div>
+    <button class="retry-btn" id="error-retry" type="button">RELOAD</button>
+  </div>
 </div>
 
 <script>
-// If the module never runs (missing vendor file, etc.), show a real
-// message instead of a silent black screen.
-window.__booted = false;
-setTimeout(() => {
-  if (!window.__booted) document.getElementById('error-box').style.display = 'flex';
-}, 8000);
-addEventListener('error', e => {
-  if (e.target && e.target.tagName === 'SCRIPT') {
-    document.getElementById('error-box').style.display = 'flex';
+// ═══════════════════════════════════════
+//  BOOT GUARD
+// ═══════════════════════════════════════
+//  Three.js r160 is vendored as a *classic* script (vendor/three.global.js)
+//  instead of an ES module, on purpose: browsers refuse module imports from a
+//  file:// page (opaque origin + CORS), so `import * as THREE from 'three'`
+//  never ran when you double-clicked index.html — the page went black and the
+//  only thing you saw was the "Three.js failed to load" panel, which blamed
+//  the vendor/ folder even when the folder was fine.
+//
+//  This guard keeps the honest part of that behaviour and drops the misleading
+//  part: it tells you WHICH failure happened.
+//    · three.global.js did not load      → vendor/ really is missing/misplaced
+//    · THREE loaded, world gen threw     → the real message + file:line
+//    · THREE loaded, WebGL refused       → hardware acceleration / GPU blocked
+//  Flags it publishes for the game: window.__threeOK, window.__booted.
+(function () {
+  const G = window;
+  const panel = document.getElementById('error-box');
+  const titleEl = document.getElementById('error-title');
+  const detailEl = document.getElementById('error-detail');
+  const seen = [];
+  G.__threeOK = false;
+  G.__booted = false;
+
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  function show(title, detail) {
+    if (!panel || panel.dataset.shown) return;
+    panel.dataset.shown = '1';
+    titleEl.textContent = title;
+    detailEl.innerHTML = detail;
+    panel.style.display = 'flex';
+    const overlay = document.getElementById('overlay');
+    if (overlay) overlay.style.display = 'none';   // don't hide the message behind START
   }
-}, true);
+  G.__showBootError = show;
+  G.__escapeHtml = esc;
+
+  const withErrors = hint => hint + (seen.length
+    ? '<br><br>' + seen.slice(0, 3).map(e => '<code>' + esc(e) + '</code>').join('<br>')
+    : '') + '<br><br>Console (F12) has the full stack trace.';
+
+  // Capture phase, so resource failures (a <script> that 404s) are seen too —
+  // those do not bubble. Runtime errors land here as well, before any panel.
+  G.addEventListener('error', e => {
+    const tag = e.target && e.target.tagName;
+    if (tag === 'SCRIPT') {   // the only external script on this page is Three.js
+      show('⚠️ Three.js failed to load',
+        'The page could not fetch <code>vendor/three.global.js</code> from next to <code>index.html</code>' +
+        ((e.target.src || '').indexOf('three') === -1 ? ' (requested: <code>' + esc(e.target.src) + '</code>)' : '') + '.' +
+        '<br><br>Copy the <b>whole</b> repository, not just the HTML file — the tree must look like:' +
+        '<br><code>superman-voxel/index.html</code><br><code>superman-voxel/vendor/three.global.js</code>' +
+        '<br><br>If the file is there, hard-reload (Ctrl+Shift+R) to clear a cached 404.');
+      return;
+    }
+    if (!G.__booted && e.message) {
+      seen.push(e.message + (e.filename ? ' — ' + e.filename.split('/').pop() + ':' + e.lineno : ''));
+      show('⚠️ The game failed to start', withErrors('Three.js loaded fine — an error stopped the code before the first frame:'));
+    }
+  }, true);
+
+  G.addEventListener('unhandledrejection', e => {
+    if (G.__booted) return;
+    const r = e.reason;
+    seen.push((r && (r.message || r)) || 'unhandled promise rejection');
+    show('⚠️ The game failed to start', withErrors('An async step was rejected before the first frame:'));
+  });
+
+  // Last-resort watchdog: covers a hung/blocked script that never reaches the
+  // first render and never throws either.
+  setTimeout(() => {
+    if (G.__booted) return;
+    if (!G.__threeOK) {
+      show('⚠️ Three.js failed to load',
+        '<code>vendor/three.global.js</code> never defined <code>THREE</code>.' +
+        '<br><br>Make sure the <b>vendor</b> folder sits next to <code>index.html</code> and that the file is ' +
+        'the full ~1.2&nbsp;MB one, then hard-reload (Ctrl+Shift+R).' +
+        '<br><br>Regenerate it any time with:<br><code>node tools/make-three-global.js</code>');
+    } else {
+      show('⚠️ The game failed to start', withErrors(
+        'Three.js is loaded, but no first frame was drawn within 8&nbsp;s — the browser may be blocking WebGL ' +
+        '(enable hardware acceleration / “WebGL” in about:flags) or a GPU driver error occurred.'));
+    }
+  }, 8000);
+
+  const retry = document.getElementById('error-retry');
+  if (retry) retry.addEventListener('click', () => location.reload());
+})();
 </script>
 
-<script type="importmap">
-// Three.js r160 is vendored locally (no CDN / internet needed).
-{ "imports": { "three": "./vendor/three.module.js" } }
-</script>
+<script src="./vendor/three.global.js"></script>
 
-<script type="module">
-import * as THREE from 'three';
+<script>
+(function () {
+'use strict';
+const THREE = window.THREE;
+if (!THREE) {
+  window.__showBootError('⚠️ Three.js failed to load',
+    '<code>vendor/three.global.js</code> loaded but did not define <code>THREE</code> — the file is probably ' +
+    'truncated or an old cached copy. Re-copy the <b>vendor</b> folder and hard-reload (Ctrl+Shift+R).');
+  return;
+}
+window.__threeOK = true;
+const escHtml = window.__escapeHtml || (s => String(s));
 
 // ═══════════════════════════════════════
 //  CONSTANTS
@@ -594,7 +697,21 @@ scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.Fog(0x87ceeb, 40, 110);
 
 const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 200);
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+// A refused WebGL context throws from inside the constructor; name it here so the
+// panel says "WebGL", not the generic boot failure.
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (err) {
+  window.__showBootError('⚠️ WebGL is not available',
+    'Three.js r' + THREE.REVISION + ' loaded correctly — your browser refused to create a WebGL context, ' +
+    'so there is nothing to draw into.' +
+    '<br><br><code>' + escHtml(err && err.message ? err.message : 'WebGL context creation failed') + '</code>' +
+    '<br><br>Try: enable hardware acceleration (chrome://settings/system → “Use graphics acceleration when ' +
+    'available”) and restart the browser. On a VM / old GPU driver, try Chrome with ' +
+    '<code>--ignore-gpu-blocklist</code>.');
+  throw err;
+}
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
@@ -712,7 +829,37 @@ function fireLaser() {
 let locked = false;
 const clearKeys = () => { S.keys = {}; };
 
-function lockPointer() { renderer.domElement.requestPointerLock(); }
+// ── pointer lock, with a fallback ───────────────────────────────────────────
+// Pointer lock can be refused rather than granted: a cross-origin iframe needs
+// allow="pointer-lock", some browsers gate it behind extra gestures, and embedded
+// previews may not expose the API at all. Every mouse handler bails out while
+// unlocked, so a refused lock used to look exactly like "the controls are dead".
+// Degrade to hold-and-drag looking instead.
+let dragLook = false;
+
+function resumePlay() {
+  S.started = true; S.paused = false; hideOverlay();
+  // `running`/`animate` are declared further down; reaching this before that
+  // declaration is impossible (only click/lock events call it), so the hoisting is safe.
+  if (!running) { running = true; requestAnimationFrame(animate); }   // the loop may never have started
+}
+function startDragLook() {
+  if (dragLook) return;
+  dragLook = true;
+  const hint = 'Pointer lock is blocked in this frame — hold the left mouse button and drag to look around.';
+  if (S.started) { resumePlay(); flashNotice(hint); }        // keep playing, just say what changed
+  else { showOverlay('🖱️ DRAG TO LOOK', hint); DOM.startBtn.textContent = 'PLAY'; }
+}
+function lockPointer() {
+  if (dragLook) return resumePlay();          // already in the fallback: this click resumes
+  const el = renderer.domElement;
+  if (typeof el.requestPointerLock !== 'function') return startDragLook();
+  try {
+    const p = el.requestPointerLock();
+    if (p && typeof p.catch === 'function') p.catch(startDragLook);   // Chrome rejects when refused
+  } catch (e) { startDragLook(); }
+}
+document.addEventListener('pointerlockerror', startDragLook);
 
 function showOverlay(title, sub) {
   DOM.overlayTitle.textContent = title;
@@ -721,6 +868,23 @@ function showOverlay(title, sub) {
   DOM.overlay.style.display = 'flex';
 }
 function hideOverlay() { DOM.overlay.style.display = 'none'; }
+
+// One-line toast for non-fatal advisories (kept out of the modal overlay so it
+// never interrupts play).
+let noticeTimer = 0;
+function flashNotice(text) {
+  let n = DOM.notice;
+  if (!n) {
+    n = document.createElement('div');
+    n.id = 'notice';
+    document.body.appendChild(n);
+    DOM.notice = n;
+  }
+  n.textContent = text;
+  n.classList.add('show');
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => n.classList.remove('show'), 6000);
+}
 
 // FIX: S.paused was only ever set to false. Pressing ESC released the pointer
 // but the game kept running, and any held key never received keyup — so the
@@ -734,7 +898,7 @@ window.addEventListener('blur', () => { S.paused = true; clearKeys(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { S.paused = true; clearKeys(); } });
 
 document.addEventListener('mousemove', e => {
-  if (!locked) return;
+  if (!locked && !(dragLook && e.buttons === 1)) return;   // fallback: look only while dragging
   // Standard FPS mapping: mouse right = look right, mouse up = look up
   // (matches Three.js PointerLockControls convention).
   S.yaw   -= e.movementX * 0.002;
@@ -755,7 +919,7 @@ document.addEventListener('keyup', e => { S.keys[e.code] = false; });
 
 let mouseDown = false;
 document.addEventListener('mousedown', () => {
-  if (!locked) return;
+  if (!locked && !dragLook) return;
   mouseDown = true;
   if (S.power === 'xray') setXray(!S.xrayActive);
 });
@@ -923,12 +1087,35 @@ function animate(time) {
 // ═══════════════════════════════════════
 DOM.seedLabel.textContent = 'seed: ' + SEED;
 DOM.seedLabel.title = 'Share this world: ?seed=' + SEED;
+// Sharing has to work from file:// as well, where navigator.clipboard is absent
+// (a file:// page is not a secure context) and history.replaceState can be
+// rejected for opaque origins. Both are niceties, so degrade — never throw.
 DOM.seedLabel.addEventListener('click', () => {
-  const u = new URL(location.href); u.searchParams.set('seed', SEED);
-  history.replaceState(null, '', u);
-  navigator.clipboard?.writeText(u.toString());
-  DOM.seedLabel.textContent = 'link copied!';
-  setTimeout(() => { DOM.seedLabel.textContent = 'seed: ' + SEED; }, 1500);
+  const shareUrl = location.href.split('?')[0].split('#')[0] + '?seed=' + SEED;
+  try { history.replaceState(null, '', shareUrl); } catch (e) { /* opaque origin: keep the URL as-is */ }
+  const flash = msg => {
+    DOM.seedLabel.textContent = msg;
+    setTimeout(() => { DOM.seedLabel.textContent = 'seed: ' + SEED; }, 1800);
+  };
+  const legacyCopy = () => {
+    const ta = document.createElement('textarea');
+    ta.value = shareUrl;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (ok) return flash('link copied!');
+    window.prompt('Copy this world link:', shareUrl);   // last resort, still one click
+    flash('link ready to copy');
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(shareUrl).then(() => flash('link copied!'), legacyCopy);
+  } else {
+    legacyCopy();
+  }
 });
 
 DOM.startBtn.addEventListener('click', () => {
@@ -939,14 +1126,15 @@ DOM.startBtn.addEventListener('click', () => {
 });
 
 renderer.domElement.addEventListener('click', () => {
-  if (!locked && S.started) lockPointer();
+  if (!locked && (S.started || dragLook)) lockPointer();
 });
 
 setPower('default');
 DOM.indicator.classList.remove('show');
 updateMinimap();
 renderer.render(scene, camera);
-window.__booted = true;
+window.__booted = true;   // first frame is on screen — the boot guard stands down
+})();
 </script>
 </body>
 </html>
