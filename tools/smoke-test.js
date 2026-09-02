@@ -858,6 +858,65 @@ check('a failed three.js script load is reported as a vendor problem',
   'title="' + B2.$('error-title').textContent + '"');
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('edits survive chunk unload (the infinite-world promise)');
+// The persistence tests cover a saved session replayed after a reload. This is
+// the other half: a block you break must still be broken when you fly 400
+// blocks away, the chunk is thrown out, and you come back.
+const ex = Math.floor(G.player.position.x), ez = Math.floor(G.player.position.z);
+const eh = G.world.heightAt(ex, ez);
+const ey = eh + 2;
+check('the target cell starts as air', G.world.getBlock(ex, ey, ez) === G.BT.AIR,
+  'block=' + G.world.getBlock(ex, ey, ez) + ' surface=' + eh);
+check('a block can be placed there', G.world.placeBlock(ex, ey, ez, G.BT.BRICK) === true);
+check('the placement is recorded as an edit', (() => {
+  const m = G.world.edits.get((ex >> 4) + ',' + (ez >> 4));
+  return !!m && m.get((ey * G.CHUNK + (ez & 15)) * G.CHUNK + (ex & 15)) === G.BT.BRICK;
+})(), 'edits for chunk ' + (ex >> 4) + ',' + (ez >> 4) + '=' +
+  ((G.world.edits.get((ex >> 4) + ',' + (ez >> 4)) || new Map()).size));
+
+G.player.position.x += 400;                     // far enough that the chunk unloads
+step(200);
+check('the edited chunk was unloaded', G.world.getChunk(ex >> 4, ez >> 4) === null,
+  'chunk=' + (G.world.getChunk(ex >> 4, ez >> 4) ? 'still loaded' : 'gone') +
+  ' total=' + G.world.chunks.size);
+G.player.position.x -= 400;                     // and back again
+step(240);
+const back = G.world.getChunk(ex >> 4, ez >> 4);
+check('the chunk regenerated on return', !!back && back.state === 2, back ? 'state=' + back.state : 'missing');
+check('the placed block is still there after regeneration',
+  G.world.getBlock(ex, ey, ez) === G.BT.BRICK,
+  'block=' + G.world.getBlock(ex, ey, ez) + ' (expected ' + G.BT.BRICK + ')');
+
+// ═══════════════════════════════════════════════════════════════════════════
+section('soak: the world stays bounded over a long flight');
+// "Fly in any direction forever" is the headline claim, so cross a dozen chunks
+// diagonally and make sure nothing accumulates and nothing goes to NaN.
+const chunksPeak = { n: 0 };
+let badState = 0, nonFinite = 0;
+for (let hop = 0; hop < 12; hop++) {
+  G.player.position.x += 26;
+  G.player.position.z += 26;
+  step(36);
+  if (G.world.chunks.size > chunksPeak.n) chunksPeak.n = G.world.chunks.size;
+  if (!Number.isFinite(G.player.position.x) || !Number.isFinite(G.player.position.y) ||
+      !Number.isFinite(G.player.position.z)) nonFinite++;
+}
+for (const ch of G.world.chunks.values()) if (ch.state === 1) badState++;
+check('the loaded set stays bounded', chunksPeak.n > 20 && chunksPeak.n < 200,
+  'peak=' + chunksPeak.n + ' now=' + G.world.chunks.size);
+check('no chunk is left generated-but-unmeshed', badState === 0, badState + ' stuck at state 1');
+check('player position stays finite', nonFinite === 0, nonFinite + ' non-finite samples');
+check('the ground under the player is loaded after the flight',
+  G.world.isLoaded(G.player.position.x, G.player.position.z),
+  'pos=' + G.player.position.x.toFixed(0) + ',' + G.player.position.z.toFixed(0));
+check('every loaded chunk has a mesh in the scene', (() => {
+  let missing = 0;
+  for (const ch of G.world.chunks.values())
+    if (ch.state === 2 && !ch.group.parent) missing++;
+  return missing === 0;
+})(), 'detached groups=0');
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('shaders (GLSL syntax)');
 // There is no GPU here, so the shaders cannot be compiled — this is the gap a
 // jsdom run cannot close. The next best thing is to parse each one with a real
