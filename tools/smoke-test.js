@@ -997,6 +997,39 @@ check("every $('id') resolves to an element in the markup", missingIds.length ==
   usedIds.size + ' ids' + (missingIds.length ? ' — missing: ' + missingIds.join(', ') : ''));
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('performance (reported, not asserted)');
+// The README quotes these numbers, so they should be reproducible by running the
+// suite rather than remembered from a one-off measurement. Printed, not checked:
+// timings vary too much between machines to make a stable assertion.
+{
+  const t0 = Date.now();
+  const P = loadPage(4242);
+  const bootMs = Date.now() - t0;
+  const pG = P.window.__game;
+
+  const buf = new Uint8Array(pG.CHUNK * pG.MAX_H * pG.CHUNK);
+  let gen = 0, genN = 0;
+  for (let i = 0; i < 32; i++) {
+    const a = Date.now();
+    pG.genChunk(pG.SEED, i - 16, (i % 7) - 3, buf);
+    gen += Date.now() - a; genN++;
+  }
+
+  let mesh = 0, meshN = 0;
+  for (const ch of pG.world.chunks.values()) {
+    if (ch.state < 1 || meshN >= 24) continue;
+    const a = Date.now();
+    const g = pG.meshChunk(ch, pG.world);
+    mesh += Date.now() - a; meshN++;
+    if (g.solid) g.solid.dispose();
+    if (g.water) g.water.dispose();
+  }
+  check('timings were measurable', genN === 32 && meshN > 0,
+    'boot ' + bootMs + ' ms · genChunk ' + (gen / genN).toFixed(1) + ' ms · meshChunk ' +
+    (mesh / meshN).toFixed(1) + ' ms (' + genN + '/' + meshN + ' samples)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('summary');
 const passed = results.filter(r => r.pass).length;
 console.log('\n' + passed + '/' + results.length + ' checks passed');
