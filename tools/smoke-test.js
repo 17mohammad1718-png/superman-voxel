@@ -997,6 +997,71 @@ check("every $('id') resolves to an element in the markup", missingIds.length ==
   usedIds.size + ' ids' + (missingIds.length ? ' — missing: ' + missingIds.join(', ') : ''));
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('voxel invariants, checked by brute force');
+// Two pieces of arithmetic the whole game rests on and that a happy-path test
+// cannot really check: the DDA raycast (a wrong tMax or a flipped face normal
+// would mine the wrong block or refuse to place) and the incremental heightmap
+// (maintained per edit instead of rescanned — if it drifts, the minimap lies and
+// standOnLand picks the wrong ground).
+
+// 1. Every reported hit must be the FIRST solid voxel along its ray, and its
+//    face normal must point back at the eye.
+let rays = 0, hitsChecked = 0, wrongBlock = 0, wrongNormal = 0, nullButSolid = 0;
+const origin = { x: G.player.position.x, y: G.player.position.y + 1.35, z: G.player.position.z };
+for (let i = 0; i < 260; i++) {
+  // Deterministic pseudo-random directions so a failure is reproducible.
+  const th = (i * 2.399963) % (Math.PI * 2);
+  const ph = Math.acos(1 - 2 * ((i * 0.6180339887) % 1));
+  const dir = {
+    x: Math.sin(ph) * Math.cos(th), y: Math.cos(ph), z: Math.sin(ph) * Math.sin(th)
+  };
+  const hit = G.voxelRaycast(origin, dir, 24);
+  rays++;
+  // Brute force: walk the ray in small steps and find the first solid voxel.
+  let bf = null;
+  for (let t = 0; t <= 24; t += 0.02) {
+    const bx = Math.floor(origin.x + dir.x * t), by = Math.floor(origin.y + dir.y * t),
+          bz = Math.floor(origin.z + dir.z * t);
+    if (G.world.isSolid(bx, by, bz)) { bf = { x: bx, y: by, z: bz, t }; break; }
+  }
+  if (!hit && bf) { nullButSolid++; continue; }
+  if (!hit) continue;
+  hitsChecked++;
+  // The DDA must not report a voxel further along than the first solid one.
+  if (bf && (hit.x !== bf.x || hit.y !== bf.y || hit.z !== bf.z) && hit.dist > bf.t + 0.05) wrongBlock++;
+  const dot = hit.nx * dir.x + hit.ny * dir.y + hit.nz * dir.z;
+  const axis = Math.abs(hit.nx) + Math.abs(hit.ny) + Math.abs(hit.nz);
+  if (hit.dist > 0 && (axis !== 1 || dot > 1e-9)) wrongNormal++;
+}
+check('the DDA never skips a nearer solid voxel', wrongBlock === 0 && nullButSolid === 0,
+  rays + ' rays, ' + hitsChecked + ' hits, ' + wrongBlock + ' wrong block, ' +
+  nullButSolid + ' missed entirely');
+check('every hit reports a unit axis normal facing the eye', wrongNormal === 0,
+  wrongNormal + ' bad normals of ' + hitsChecked + ' hits');
+
+// 2. The incremental heightmap must still equal a full column rescan, after all
+//    the mining, placing, freezing and punching the earlier sections did.
+let cols = 0, drift = 0, worstDrift = 0;
+for (const ch of G.world.chunks.values()) {
+  if (ch.state < 1) continue;
+  for (let lz = 0; lz < G.CHUNK; lz += 3)
+    for (let lx = 0; lx < G.CHUNK; lx += 3) {
+      const wx = ch.cx * G.CHUNK + lx, wz = ch.cz * G.CHUNK + lz;
+      // Same definition the game uses: the highest NON-AIR block, water included
+      // — the heightmap feeds the minimap, where the sea surface is the surface.
+      // (Comparing against isSolid() instead drifts by the water depth on every
+      // ocean column, which is a wrong test, not a bug.)
+      let h = 0;
+      for (let y = G.MAX_H - 1; y >= 0; y--) if (G.world.getBlock(wx, y, wz) !== G.BT.AIR) { h = y; break; }
+      const got = G.world.heightAt(wx, wz);
+      cols++;
+      if (got !== h) { drift++; worstDrift = Math.max(worstDrift, Math.abs(got - h)); }
+    }
+}
+check('the cached heightmap matches a full column rescan', drift === 0,
+  cols + ' columns sampled, ' + drift + ' drifted' + (drift ? ' (worst ' + worstDrift + ')' : ''));
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('performance (reported, not asserted)');
 // The README quotes these numbers, so they should be reproducible by running the
 // suite rather than remembered from a one-off measurement. Printed, not checked:

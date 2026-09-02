@@ -44,7 +44,8 @@ jobs:
       # generation path, its job cap and its stall watchdog all execute. Also covers
       # the desktop UI (hotbar, minimap, zoom, high score) and the boot guard's
       # error panels, plus edit persistence across chunk unload and a bounded-world
-      # soak flight.
-      # 135 checks in total.
+      # soak flight, and brute-force invariants for the DDA raycast and the cached
+      # heightmap.
+      # 139 checks in total.
       - name: Smoke test
         run: npm test
