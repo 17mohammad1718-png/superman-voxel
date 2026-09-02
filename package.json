@@ -1,0 +1,16 @@
+{
+  "name": "superman-voxel",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Superman voxel simulator — a single-file browser game on three.js, no build step.",
+  "scripts": {
+    "test": "node tools/smoke-test.js",
+    "vendor:check": "node tools/make-three-global.js --check",
+    "vendor:build": "node tools/make-three-global.js",
+    "start": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  },
+  "license": "MIT"
+}
