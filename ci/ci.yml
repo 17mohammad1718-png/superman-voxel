@@ -39,6 +39,7 @@ jobs:
       # the voxel raycast, powers, streaming, persistence and settings — plus
       # static checks (GLSL parse of every shader stage, mesh winding, THREE.* API
       # surface, DOM ids) and boots a second instance with a coarse pointer to
-      # exercise the touch controls. 88 checks in total.
+      # exercise the touch controls, plus the water mesher (the dry default spawn
+      # never reaches it). 94 checks in total.
       - name: Smoke test
         run: npm test

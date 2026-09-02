@@ -622,6 +622,47 @@ check('pause button opens the pause menu', tG.S.paused === true &&
   ' display=' + T.$('pause-menu').style.display);
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('water (the dry spawn never reaches this path)');
+// For seed 4242 the spawn area has no ocean, so the water mesher, the second
+// draw call per chunk and matWater have never executed in any test. Find the
+// nearest chunk that does hold water, then stream it in for real.
+const CHUNK_VOL = G.CHUNK * G.MAX_H * G.CHUNK;
+let waterChunk = null, waterCells = 0;
+for (let r = 0; r <= 24 && !waterChunk; r++) {
+  for (let dz = -r; dz <= r && !waterChunk; dz++)
+    for (let dx = -r; dx <= r && !waterChunk; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;      // ring only
+      const blocks = new Uint8Array(CHUNK_VOL);
+      G.genChunk(G.SEED, dx, dz, blocks);
+      let n = 0;
+      for (let i = 0; i < blocks.length; i++) if (blocks[i] === G.BT.WATER) n++;
+      if (n) { waterChunk = { cx: dx, cz: dz }; waterCells = n; }
+    }
+}
+check('found a chunk containing water', !!waterChunk,
+  waterChunk ? 'chunk ' + waterChunk.cx + ',' + waterChunk.cz + ' with ' + waterCells + ' water cells'
+             : 'none within 24 chunks');
+
+if (waterChunk) {
+  G.player.position.set(waterChunk.cx * G.CHUNK + 8.5, 40, waterChunk.cz * G.CHUNK + 8.5);
+  step(150);
+  const ch = G.world.getChunk(waterChunk.cx, waterChunk.cz);
+  check('the water chunk streamed in and meshed', !!ch && ch.state === 2, ch ? 'state=' + ch.state : 'missing');
+  check('water is really in the world data',
+    G.world.getBlock(waterChunk.cx * G.CHUNK + 8, G.SEA_LEVEL, waterChunk.cz * G.CHUNK + 8) === G.BT.WATER ||
+    G.world.getBlock(waterChunk.cx * G.CHUNK + 3, G.SEA_LEVEL, waterChunk.cz * G.CHUNK + 3) === G.BT.WATER,
+    'probe at sea level');
+  check('the chunk gets a second draw call for water', !!ch && !!ch.meshWater &&
+    ch.meshWater.parent === ch.group, ch && ch.meshWater ? 'meshed' : 'no water mesh');
+  check('the water mesh uses matWater', !!ch && !!ch.meshWater && ch.meshWater.material === G.matWater);
+  const wpos = ch && ch.meshWater ? ch.meshWater.geometry.attributes.position.array : null;
+  let topY = -1, minY = 1e9;
+  if (wpos) for (let i = 1; i < wpos.length; i += 3) { if (wpos[i] > topY) topY = wpos[i]; if (wpos[i] < minY) minY = wpos[i]; }
+  check('the water surface is flush with the top water block',
+    topY === G.SEA_LEVEL + 1, 'top y=' + topY + ' (sea level ' + G.SEA_LEVEL + ', bottom ' + minY + ')');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('shaders (GLSL syntax)');
 // There is no GPU here, so the shaders cannot be compiled — this is the gap a
 // jsdom run cannot close. The next best thing is to parse each one with a real
