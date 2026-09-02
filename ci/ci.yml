@@ -43,7 +43,8 @@ jobs:
       # never reaches it), and runs the blob worker source in a vm so the off-thread
       # generation path, its job cap and its stall watchdog all execute. Also covers
       # the desktop UI (hotbar, minimap, zoom, high score) and the boot guard's
-      # error panels.
-      # 124 checks in total.
+      # error panels, plus edit persistence across chunk unload and a bounded-world
+      # soak flight.
+      # 135 checks in total.
       - name: Smoke test
         run: npm test
