@@ -115,6 +115,43 @@ function loadPage(seed, storage, opts) {
     el.hasPointerCapture = function () { return false; };
   }
 
+  // --- Worker: jsdom has none, so without this every instance silently takes
+  // the synchronous fallback and the entire off-thread generation path (handshake,
+  // 6-job cap, in-flight bookkeeping, stall watchdog) is dead code as far as the
+  // suite is concerned. This stub runs the real blob source in a vm and exchanges
+  // messages for real; delivery is queued so the test controls when they land.
+  let pump = () => {};
+  if (opts.worker) {
+    const vm = require('vm');
+    const sources = new Map();
+    let blobN = 0;
+    window.Blob = function (parts) { this.__src = (parts || []).join(''); };
+    window.URL.createObjectURL = b => { const u = 'blob:smoke/' + (++blobN); sources.set(u, b.__src); return u; };
+    window.URL.revokeObjectURL = () => {};
+    const pending = [];
+    window.Worker = class {
+      constructor(url) {
+        const src = sources.get(url);
+        if (!src) throw new Error('worker stub: no source for ' + url);
+        const self = {};
+        const ctx = { self, Math, JSON, Uint8Array, Int16Array, Float32Array, Float64Array,
+                      Int32Array, Uint32Array, ArrayBuffer, console };
+        vm.createContext(ctx);
+        self.postMessage = d => pending.push({ worker: this, data: d });
+        vm.runInContext(src, ctx, { timeout: 20000 });
+        this._self = self;
+      }
+      postMessage(d) { if (this._self && this._self.onmessage) this._self.onmessage({ data: d }); }
+      terminate() {}
+    };
+    pump = () => {
+      while (pending.length) {
+        const m = pending.shift();
+        if (m.worker.onmessage) m.worker.onmessage({ data: m.data });
+      }
+    };
+  }
+
   if (storage) for (const [k, v] of Object.entries(storage)) window.localStorage.setItem(k, v);
 
   let bootError = null;
@@ -123,7 +160,7 @@ function loadPage(seed, storage, opts) {
     window.eval(inline[1]);   // the game
   } catch (e) { bootError = e; }
 
-  return { dom, window, step, stats2d, render, bootError, $: id => window.document.getElementById(id) };
+  return { dom, window, step, pump, stats2d, render, bootError, $: id => window.document.getElementById(id) };
 }
 
 function key(window, code, type) {
@@ -620,6 +657,82 @@ pointer(T.window, T.$('tb-pause'), 'pointerdown', 0, 0);
 check('pause button opens the pause menu', tG.S.paused === true &&
   T.$('pause-menu').style.display === 'flex', 'paused=' + tG.S.paused +
   ' display=' + T.$('pause-menu').style.display);
+
+// ═══════════════════════════════════════════════════════════════════════════
+section('worker generation (the off-thread path)');
+// Every other instance here has no Worker, so it silently takes the synchronous
+// fallback. Boot one against the real blob source running in a vm, so ChunkGen's
+// handshake, 6-job cap, in-flight bookkeeping and stall watchdog all execute.
+const W = loadPage(4242, null, { worker: true });
+check('worker instance boots', W.bootError === null, String(W.bootError && W.bootError.message));
+const wG = W.window.__game;
+check('a Worker was constructed from the blob source', !!wG.world.gen.worker,
+  'worker=' + !!wG.world.gen.worker);
+check('before the handshake nothing is assumed ready', wG.world.gen.ready !== true,
+  'ready=' + wG.world.gen.ready);
+// generateSpawnArea() builds the 3×3 around the player synchronously on purpose,
+// so the very first frame has ground underfoot. Everything beyond that must be
+// left to the worker rather than burning the main thread at boot.
+const bootMeshed = Array.from(wG.world.chunks.values()).filter(c => c.state === 2).length;
+check('boot builds only the spawn 3×3 synchronously', bootMeshed === 9, 'meshed at boot=' + bootMeshed);
+check('the rest is queued for the worker, not generated locally',
+  wG.world.gen.queue.length > 50 && wG.world.gen.inFlight.size === 0,
+  'queued=' + wG.world.gen.queue.length + ' inFlight=' + wG.world.gen.inFlight.size);
+
+W.$('startBtn').dispatchEvent(new W.window.MouseEvent('click', { bubbles: true }));
+let maxInFlight = 0;
+const drive = n => {
+  for (let i = 0; i < n; i++) {
+    W.pump(); W.step(1);
+    if (wG.world.gen.inFlight.size > maxInFlight) maxInFlight = wG.world.gen.inFlight.size;
+  }
+};
+W.pump();                                       // the ready ping arrives
+check('the ready handshake completes', wG.world.gen.ready === true, 'ready=' + wG.world.gen.ready);
+drive(60);
+let wMeshed = 0, wTotal = 0;
+for (const ch of wG.world.chunks.values()) { wTotal++; if (ch.state === 2) wMeshed++; }
+check('chunks arrive over the message protocol and mesh', wMeshed > 20,
+  wMeshed + '/' + wTotal + ' meshed, inFlight=' + wG.world.gen.inFlight.size);
+// Sampled after every frame while 88 chunks stream in: the cap has to hold at
+// the moment of dispatch, not just once the queue has drained.
+check('in-flight jobs never exceed the cap of 6', maxInFlight > 0 && maxInFlight <= 6,
+  'peak inFlight=' + maxInFlight);
+check('the in-flight map drains as replies land', wG.world.gen.inFlight.size === 0,
+  'inFlight=' + wG.world.gen.inFlight.size);
+
+// The point of the whole arrangement: worker-built terrain must be the terrain.
+const wCh = wG.world.getChunk(0, 0);
+const wLocal = new Uint8Array(wG.CHUNK * wG.MAX_H * wG.CHUNK);
+wG.genChunk(wG.SEED, 0, 0, wLocal);
+check('a streamed chunk matches the main-thread generator byte for byte',
+  !!wCh && wCh.state >= 1 && wLocal.every((v, i) => v === wCh.blocks[i]),
+  wCh ? wLocal.length + ' bytes compared' : 'chunk 0,0 missing');
+check('no player-fall-through after worker streaming',
+  wG.world.isLoaded(wG.player.position.x, wG.player.position.z),
+  'loaded under player=' + wG.world.isLoaded(wG.player.position.x, wG.player.position.z));
+
+// Kill the worker mid-flight. The 3 s watchdog must reap it, re-queue whatever it
+// was holding, and finish the work on the main thread — otherwise a worker that
+// dies leaves a permanent hole in the world.
+let fakeNow = W.window.performance.now();
+Object.defineProperty(W.window.performance, 'now', { value: () => fakeNow, configurable: true });
+wG.world.gen.worker.postMessage = () => {};      // swallow every job from here on
+wG.player.position.x += 320;
+wG.player.position.z += 320;
+W.step(4);
+const stuck = wG.world.gen.inFlight.size;
+check('jobs are handed to the worker that will never answer', stuck > 0, 'inFlight=' + stuck);
+fakeNow += 4000;                                 // past the 3 s stall threshold
+W.step(2);
+check('a stalled worker is reaped', wG.world.gen.worker === null &&
+  /stalled/.test(wG.world.gen.reason || ''), 'reason=' + wG.world.gen.reason);
+W.step(80);
+check('the re-queued chunks finish on the main thread',
+  wG.world.gen.queue.length === 0 && wG.world.gen.inFlight.size === 0 &&
+  wG.world.isLoaded(wG.player.position.x, wG.player.position.z),
+  'queue=' + wG.world.gen.queue.length + ' loaded=' +
+  wG.world.isLoaded(wG.player.position.x, wG.player.position.z));
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('water (the dry spawn never reaches this path)');

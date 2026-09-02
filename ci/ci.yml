@@ -40,6 +40,8 @@ jobs:
       # static checks (GLSL parse of every shader stage, mesh winding, THREE.* API
       # surface, DOM ids) and boots a second instance with a coarse pointer to
       # exercise the touch controls, plus the water mesher (the dry default spawn
-      # never reaches it). 94 checks in total.
+      # never reaches it), and runs the blob worker source in a vm so the off-thread
+      # generation path, its job cap and its stall watchdog all execute.
+      # 108 checks in total.
       - name: Smoke test
         run: npm test
