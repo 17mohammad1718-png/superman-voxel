@@ -43,7 +43,15 @@ npm test           # ۵۵ بررسی روی خودِ کد index.html
 npm run vendor:check
 ```
 
-`tools/smoke-test.js` اسکریپت **دست‌نخوردهٔ** داخل `index.html` را در jsdom با three.js واقعیِ `vendor/` اجرا می‌کند (فقط `WebGLRenderer` و canvas دوبعدی stub می‌شوند) و این‌ها را می‌سنجد: بوت، تولید زمین و قطعی‌بودن آن، کد Worker، greedy meshing، ری‌کست ووکسلی، قدرت‌ها، استریم چانک، ذخیره/بازیابی و تنظیمات. فایل CI در `ci/ci.yml` است و همین دو دستور را اجرا می‌کند؛ چون باتِ بازکنندهٔ PR اجازهٔ نوشتن در `.github/workflows/` را ندارد، برای فعال‌سازی یک‌بار آن را کپی کنید:
+`tools/smoke-test.js` اسکریپت **دست‌نخوردهٔ** داخل `index.html` را در jsdom با three.js واقعیِ `vendor/` اجرا می‌کند (فقط `WebGLRenderer` و canvas دوبعدی stub می‌شوند) و این‌ها را می‌سنجد: بوت، تولید زمین و قطعی‌بودن آن، کد Worker، greedy meshing، ری‌کست ووکسلی، قدرت‌ها، استریم چانک، ذخیره/بازیابی و تنظیمات.
+
+علاوه بر اجرا، سه بررسی ایستا هم انجام می‌شود (۶۴ بررسی در مجموع):
+
+- **شیدرها**: هر ۶ مرحلهٔ GLSL (vertex/fragment برای زمین، آب و آسمان) با پارسر واقعی GLSL ES پارس می‌شوند، با همان declarationهایی که three.js به یک `ShaderMaterial` تزریق می‌کند. این جای خالیِ نبودِ GPU را تا حد syntax پر می‌کند.
+- **سطح API**: هر ۳۷ نماد `THREE.*` که بازی استفاده می‌کند باید در بیلد r160ِ وندورشده وجود داشته باشد.
+- **DOM**: هر ۴۷ شناسهٔ `$('id')` باید در مارکاپ وجود داشته باشد — غلط تایپی اینجا در بوت خودش را نشان نمی‌دهد، بلکه اولین‌بار وقتی آن هندلر اجرا شود (مثلاً کنترل لمسی) منفجر می‌شود.
+
+> ⚠️ چیزی که تست **نمی**سنجد: کامپایل واقعی شیدر روی GPU و ظاهر بصری (مرورگر headless در محیط CI نصب نمی‌شود). اگر صفحه سیاه یا سفید بود، خطای کامپایل را در کنسول F12 ببینید. فایل CI در `ci/ci.yml` است و همین دو دستور را اجرا می‌کند؛ چون باتِ بازکنندهٔ PR اجازهٔ نوشتن در `.github/workflows/` را ندارد، برای فعال‌سازی یک‌بار آن را کپی کنید:
 
 ```bash
 mkdir -p .github/workflows && cp ci/ci.yml .github/workflows/ci.yml
@@ -158,7 +166,7 @@ superman-voxel/
 │   ├── make-three-global.js← ماژول → بیلد گلوبال: node tools/make-three-global.js [--check]
 │   └── smoke-test.js       ← تست دود: npm test
 ├── ci/ci.yml               ← workflow آماده (یک‌بار به .github/workflows/ کپی شود)
-├── package.json            ← فقط devDependency (jsdom) برای تست؛ بازی به آن نیاز ندارد
+├── package.json            ← فقط devDependency (jsdom، پارسر GLSL) برای تست؛ بازی به آن‌ها نیاز ندارد
 ├── LICENSE                 ← MIT (+ یادکرد three.js)
 ├── README.md
 ├── REVIEW.md               ← بررسی فنی نسخهٔ اول و وضعیت هر مورد

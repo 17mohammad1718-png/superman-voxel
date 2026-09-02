@@ -423,6 +423,86 @@ check('block diff replayed into the world', (() => {
 check('fog setting restored', G2.U.uFogNear.value === 18, 'fogNear=' + G2.U.uFogNear.value);
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('shaders (GLSL syntax)');
+// There is no GPU here, so the shaders cannot be compiled — this is the gap a
+// jsdom run cannot close. The next best thing is to parse each one with a real
+// GLSL ES parser, with the declarations three.js injects for a ShaderMaterial
+// prepended. That catches the typos, stray braces and missing semicolons that
+// would otherwise show up as a black screen in the browser.
+const PRECISION = 'precision highp float;\nprecision highp int;\n';
+const VERT_BUILTINS = [
+  'uniform mat4 modelMatrix;', 'uniform mat4 modelViewMatrix;', 'uniform mat4 projectionMatrix;',
+  'uniform mat4 viewMatrix;', 'uniform mat3 normalMatrix;', 'uniform vec3 cameraPosition;',
+  'uniform bool isOrthographic;',
+  'attribute vec3 position;', 'attribute vec3 normal;', 'attribute vec2 uv;'
+].join('\n') + '\n';
+const FRAG_BUILTINS = [
+  'uniform mat4 viewMatrix;', 'uniform vec3 cameraPosition;', 'uniform bool isOrthographic;'
+].join('\n') + '\n';
+
+// Collected from the material objects themselves, not by walking the scene:
+// the water mesh only exists once a chunk containing water has been meshed, and
+// a seed whose spawn area is dry would silently skip the water shader.
+const shaderMats = [G.matSolid, G.matWater];
+G.scene.traverse(o => {
+  if (o.material && o.material.isShaderMaterial && shaderMats.indexOf(o.material) < 0) shaderMats.push(o.material);
+});
+check('terrain, water and sky materials all collected', shaderMats.length === 3,
+  shaderMats.length + ' materials');
+const matLabel = m => (m === G.matSolid ? 'terrain solid' : m === G.matWater ? 'water' : 'sky');
+
+let glslParser = null;
+try { glslParser = require('@shaderfrog/glsl-parser').parser; } catch (e) { glslParser = null; }
+if (glslParser) {
+  for (const m of shaderMats) {
+    const label = matLabel(m);
+    const stages = [['vertex', m.vertexShader, VERT_BUILTINS], ['fragment', m.fragmentShader, FRAG_BUILTINS]];
+    for (const st of stages) {
+      let err = '';
+      // The parser warns on stderr about GLSL built-ins it does not declare
+      // (gl_Position, gl_FragColor). Silence just those, keep real errors.
+      const warn = console.warn, errFn = console.error;
+      console.warn = () => {}; console.error = () => {};
+      try { glslParser.parse(PRECISION + st[2] + st[1]); }
+      catch (e) { err = String(e.message).split('\n')[0]; }
+      finally { console.warn = warn; console.error = errFn; }
+      check(label + ' ' + st[0] + ' shader parses as GLSL ES', !err, err || st[1].split('\n').length + ' lines');
+    }
+  }
+} else {
+  console.log('  skip  @shaderfrog/glsl-parser is not installed (npm ci)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+section('static consistency');
+const pageSource = fs.readFileSync(HTML, 'utf8');
+const inlineScripts = [];
+pageSource.replace(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g, (_, body) => {
+  inlineScripts.push(body); return '';
+});
+const gameSrc = inlineScripts[inlineScripts.length - 1];
+
+// Every THREE.* the game touches must exist in the vendored r160 build — a
+// renamed or removed export would only throw at runtime.
+const usedThree = new Set();
+const re3 = /\bTHREE\.([A-Za-z_$][A-Za-z0-9_$]*)/g;
+let m3;
+while ((m3 = re3.exec(gameSrc))) usedThree.add(m3[1]);
+const missingThree = Array.from(usedThree).filter(n => window.THREE[n] === undefined);
+check('every THREE.* referenced exists in vendor/three.global.js', missingThree.length === 0,
+  usedThree.size + ' symbols' + (missingThree.length ? ' — missing: ' + missingThree.join(', ') : ''));
+
+// Every $('id') must resolve. A typo here never breaks the boot path: it breaks
+// the first time that handler runs (the touch controls, for instance).
+const usedIds = new Set();
+const reId = /(?:\$|getElementById)\(\s*'([^']+)'\s*\)/g;
+let mId;
+while ((mId = reId.exec(gameSrc))) usedIds.add(mId[1]);
+const missingIds = Array.from(usedIds).filter(id => !window.document.getElementById(id));
+check("every $('id') resolves to an element in the markup", missingIds.length === 0,
+  usedIds.size + ' ids' + (missingIds.length ? ' — missing: ' + missingIds.join(', ') : ''));
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('summary');
 const passed = results.filter(r => r.pass).length;
 console.log('\n' + passed + '/' + results.length + ' checks passed');
