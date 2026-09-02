@@ -1,0 +1,41 @@
+# GitHub Actions workflow for this repository.
+#
+# It lives here instead of .github/workflows/ because the automation that opens
+# this pull request authenticates as a GitHub App without the `workflows`
+# permission, and GitHub refuses such pushes outright:
+#   "refusing to allow a GitHub App to create or update workflow
+#    `.github/workflows/ci.yml` without `workflows` permission"
+# To activate it, copy the file into place on a branch you push yourself:
+#   mkdir -p .github/workflows && cp ci/ci.yml .github/workflows/ci.yml
+# Nothing else needs to change — the steps below only use npm scripts.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # The vendored global build must match the ES module it is generated from,
+      # otherwise someone edited a generated file by hand.
+      - name: Vendored three.js is up to date
+        run: npm run vendor:check
+
+      # Runs the unmodified inline script of index.html inside jsdom against the
+      # real three.js build: world generation, greedy meshing, the worker source,
+      # the voxel raycast, powers, streaming, persistence and settings.
+      - name: Smoke test
+        run: npm test
