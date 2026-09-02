@@ -10,6 +10,7 @@
     "start": "python3 -m http.server 8080"
   },
   "devDependencies": {
+    "@shaderfrog/glsl-parser": "^7.0.1",
     "jsdom": "^25.0.0"
   },
   "license": "MIT"

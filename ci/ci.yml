@@ -36,6 +36,8 @@ jobs:
 
       # Runs the unmodified inline script of index.html inside jsdom against the
       # real three.js build: world generation, greedy meshing, the worker source,
-      # the voxel raycast, powers, streaming, persistence and settings.
+      # the voxel raycast, powers, streaming, persistence and settings — plus
+      # static checks (GLSL parse of every shader stage, THREE.* API surface,
+      # DOM ids). 64 checks in total.
       - name: Smoke test
         run: npm test
