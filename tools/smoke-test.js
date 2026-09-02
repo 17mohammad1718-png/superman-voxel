@@ -776,6 +776,88 @@ if (waterChunk) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('desktop UI: hotbar, minimap, zoom, high score');
+key(window, 'Digit3');
+check('number keys pick a hotbar slot', G.S.hotbar === 2, 'hotbar=' + G.S.hotbar);
+check('the hotbar UI follows the selection', (() => {
+  const slots = Array.from(window.document.querySelectorAll('#hotbar .hb-slot'));
+  const active = slots.findIndex(el => el.classList.contains('active'));
+  return slots.length === 8 && active === 2;
+})(), 'slots=' + window.document.querySelectorAll('#hotbar .hb-slot').length +
+  ' active=' + Array.from(window.document.querySelectorAll('#hotbar .hb-slot'))
+    .findIndex(el => el.classList.contains('active')));
+
+const mapOn = G.S.mapOn;
+key(window, 'KeyM');
+check('M toggles the minimap and syncs the setting checkbox',
+  G.S.mapOn === !mapOn && g.$('opt-map').checked === G.S.mapOn &&
+  g.$('minimap').classList.contains('hidden') === !G.S.mapOn,
+  'mapOn=' + G.S.mapOn + ' hidden=' + g.$('minimap').classList.contains('hidden'));
+key(window, 'KeyM');
+check('M toggles back', G.S.mapOn === mapOn && !g.$('minimap').classList.contains('hidden'));
+
+const camBefore = G.S.camDist;
+window.document.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 200 }));
+check('the scroll wheel zooms the camera', G.S.camDist !== camBefore,
+  camBefore + ' -> ' + G.S.camDist);
+for (let i = 0; i < 60; i++) window.document.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 500 }));
+check('zoom is clamped', G.S.camDist === 20, 'camDist=' + G.S.camDist);
+for (let i = 0; i < 60; i++) window.document.dispatchEvent(new window.WheelEvent('wheel', { deltaY: -500 }));
+check('zoom is clamped at the near end too', G.S.camDist === 3, 'camDist=' + G.S.camDist);
+
+const slotBefore = G.S.hotbar;
+window.document.dispatchEvent(new window.WheelEvent('wheel', { deltaY: 100, shiftKey: true }));
+check('shift+wheel cycles the hotbar', G.S.hotbar === (slotBefore + 1) % 8,
+  slotBefore + ' -> ' + G.S.hotbar);
+
+G.S.score = 1234;
+step(70);                                       // autosave runs at ~1 Hz of accumulated dt
+check('the high score is persisted', window.localStorage.getItem(saveKey + '.best') === '1234',
+  'best=' + window.localStorage.getItem(saveKey + '.best'));
+const B3 = loadPage(4242, { [saveKey + '.best']: '1234' });
+check('the high score survives a reload', B3.window.__game.S.best === 1234,
+  'best=' + B3.window.__game.S.best);
+
+// ═══════════════════════════════════════════════════════════════════════════
+section('boot guard (the failure the player actually sees)');
+// This is the only thing standing between a broken boot and a blank screen, and
+// every branch of it is untested until here.
+const B = loadPage(4242);
+const bw = B.window;
+check('the guard published its hooks', typeof bw.__showBootError === 'function' &&
+  typeof bw.__escapeHtml === 'function' && bw.__threeOK === true && bw.__booted === true,
+  'threeOK=' + bw.__threeOK + ' booted=' + bw.__booted);
+
+// A runtime error before the first frame must surface — with the message
+// escaped, since it is written into innerHTML.
+bw.__booted = false;
+bw.dispatchEvent(new bw.ErrorEvent('error', {
+  message: '<img src=x onerror=alert(1)>', filename: 'http://localhost/index.html', lineno: 7
+}));
+check('a pre-boot runtime error opens the panel and hides START',
+  B.$('error-box').style.display === 'flex' && B.$('overlay').style.display === 'none' &&
+  /failed to start/i.test(B.$('error-title').textContent),
+  'title="' + B.$('error-title').textContent + '"');
+check('the error message is escaped, not injected as HTML',
+  !/<img/.test(B.$('error-detail').innerHTML) && /&lt;img/.test(B.$('error-detail').innerHTML),
+  B.$('error-detail').innerHTML.slice(0, 56));
+check('the panel names the file and line', /index\.html:7/.test(B.$('error-detail').innerHTML),
+  (B.$('error-detail').innerHTML.match(/index\.html:\d+/) || ['(none)'])[0]);
+check('the retry button exists', !!B.$('error-retry'));
+
+// A <script> that fails to fetch is a different diagnosis and must not be
+// reported as a game bug.
+const B2 = loadPage(4242);
+const tag = B2.window.document.createElement('script');
+tag.src = './vendor/three.global.js';
+B2.window.document.body.appendChild(tag);
+tag.dispatchEvent(new B2.window.Event('error'));
+check('a failed three.js script load is reported as a vendor problem',
+  /Three\.js failed to load/.test(B2.$('error-title').textContent) &&
+  /vendor\/three\.global\.js/.test(B2.$('error-detail').innerHTML),
+  'title="' + B2.$('error-title').textContent + '"');
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('shaders (GLSL syntax)');
 // There is no GPU here, so the shaders cannot be compiled — this is the gap a
 // jsdom run cannot close. The next best thing is to parse each one with a real
