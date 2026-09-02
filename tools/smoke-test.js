@@ -263,6 +263,51 @@ check('UVs, tiles, AO shade and x-ray flag attributes present', (() => {
 })());
 
 // ═══════════════════════════════════════════════════════════════════════════
+section('mesh geometry (winding, grid, tiles)');
+// A flipped winding in the greedy mesher is invisible to every other check in
+// this file and shows up in the browser as *missing terrain*, because the
+// material culls back faces. There is no GPU here to notice that, so verify it
+// numerically instead: the geometric normal of every emitted triangle must point
+// along exactly one world axis, and all six directions must occur.
+let oriented = 0, degenerate = 0, offAxis = 0, offGrid = 0, badTile = 0, badTuv = 0;
+const dirHist = {};
+G.scene.traverse(o => {
+  if (!(o.isMesh && o.geometry && o.geometry.attributes.aTile)) return;
+  const pos = o.geometry.attributes.position.array;
+  const idx = o.geometry.index.array;
+  const tile = o.geometry.attributes.aTile.array;
+  const tuv = o.geometry.attributes.aTuv.array;
+  for (let i = 0; i < tile.length; i++) if (!(tile[i] >= 0 && tile[i] <= 15)) badTile++;
+  for (let i = 0; i < tuv.length; i++) if (tuv[i] !== Math.round(tuv[i])) badTuv++;
+  for (let i = 0; i < pos.length; i++) if (Math.abs(pos[i] - Math.round(pos[i])) > 1e-4) offGrid++;
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-6) { degenerate++; continue; }
+    nx /= len; ny /= len; nz /= len;
+    const ax = Math.round(nx), ay = Math.round(ny), az = Math.round(nz);
+    const onAxis = Math.abs(nx - ax) < 1e-4 && Math.abs(ny - ay) < 1e-4 && Math.abs(nz - az) < 1e-4 &&
+      Math.abs(ax) + Math.abs(ay) + Math.abs(az) === 1;
+    if (!onAxis) { offAxis++; continue; }
+    const key = ax + ',' + ay + ',' + az;
+    dirHist[key] = (dirHist[key] || 0) + 1;
+    oriented++;
+  }
+});
+check('no degenerate triangles', degenerate === 0, degenerate + ' degenerate');
+check('every triangle faces exactly one world axis', offAxis === 0,
+  oriented + ' oriented triangles, ' + offAxis + ' off-axis');
+check('all six face directions present — winding is not flipped',
+  ['1,0,0', '-1,0,0', '0,1,0', '0,-1,0', '0,0,1', '0,0,-1'].every(k => dirHist[k] > 0),
+  JSON.stringify(dirHist));
+check('vertices sit on the integer voxel grid', offGrid === 0, offGrid + ' off-grid components');
+check('tile indices address real atlas slots', badTile === 0, badTile + ' out of range');
+check('tile UVs are whole numbers of tiles', badTuv === 0, badTuv + ' fractional');
+
+// ═══════════════════════════════════════════════════════════════════════════
 section('play');
 g.$('startBtn').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 check('start engages the pointer-lock fallback', g.$('overlay').style.display === 'none' &&
