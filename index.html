@@ -2736,7 +2736,7 @@ DOM.resetWorldBtn.addEventListener('click', () => {
   S.mission = 0;
   for (const k in S.stats) S.stats[k] = 0;
   world.resetWorld();
-  generateSpawnArea();
+  generateSpawnArea(player.position.x, player.position.z);
   updateMissionBar();
   flashNotice('🔄 World reset');
   try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
@@ -2857,18 +2857,24 @@ let pendingPower = null;
 
 // The spawn region is generated synchronously: the player must never start on
 // top of ground that does not exist yet. Everything beyond it streams in.
-function generateSpawnArea() {
+// `at` defaults to the saved spawn; RESET WORLD passes the player's own position,
+// because regenerating around the origin while the player stands 400 blocks away
+// would leave them hovering over unloaded ground until the streamer caught up.
+function generateSpawnArea(atX, atZ) {
+  const ax = atX === undefined ? spawnPos.x : atX;
+  const az = atZ === undefined ? spawnPos.z : atZ;
+  const cx0 = Math.floor(ax / CHUNK), cz0 = Math.floor(az / CHUNK);
   for (let dz = -1; dz <= 1; dz++)
     for (let dx = -1; dx <= 1; dx++) {
-      const ch = world.ensure(dx, dz);
+      const ch = world.ensure(cx0 + dx, cz0 + dz);
       if (ch.state === 0) {
         const blocks = new Uint8Array(CHUNK_VOL);
-        genChunk(SEED, dx, dz, blocks);
-        onChunkGenerated(dx, dz, blocks);
+        genChunk(SEED, cx0 + dx, cz0 + dz, blocks);
+        onChunkGenerated(cx0 + dx, cz0 + dz, blocks);
       }
     }
-  world.gen.queue = world.gen.queue.filter(q => Math.abs(q.cx) > 1 || Math.abs(q.cz) > 1);
-  world.update(spawnPos.x, spawnPos.z);
+  world.gen.queue = world.gen.queue.filter(q => Math.abs(q.cx - cx0) > 1 || Math.abs(q.cz - cz0) > 1);
+  world.update(ax, az);
   for (let i = 0; i < 12; i++) world.flush();
 }
 

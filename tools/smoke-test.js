@@ -34,7 +34,8 @@ function check(name, cond, extra) {
 function section(t) { console.log('\n' + t); }
 
 // ── load the page with its inline scripts held back ──────────────────────────
-function loadPage(seed, storage) {
+function loadPage(seed, storage, opts) {
+  opts = opts || {};
   let html = fs.readFileSync(HTML, 'utf8');
   const inline = [];
   html = html.replace(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g, (_, body) => {
@@ -98,6 +99,21 @@ function loadPage(seed, storage) {
       set: (o, p, v) => { o[p] = v; return true; }
     });
   };
+
+  // --- matchMedia / pointer capture: jsdom has neither. Without them IS_TOUCH
+  // is false and initTouch() never runs, so the whole touch control path — the
+  // only input scheme a phone gets — would go completely untested. opts.touch
+  // turns it on and provides the minimum the handlers rely on.
+  window.matchMedia = q => ({
+    matches: !!opts.touch && /pointer:\s*coarse/.test(q), media: q,
+    addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}
+  });
+  if (opts.touch) {
+    const el = window.Element.prototype;
+    el.setPointerCapture = function () {};
+    el.releasePointerCapture = function () {};
+    el.hasPointerCapture = function () { return false; };
+  }
 
   if (storage) for (const [k, v] of Object.entries(storage)) window.localStorage.setItem(k, v);
 
@@ -466,6 +482,144 @@ check('block diff replayed into the world', (() => {
   return applicable > 0 && applied === applicable;
 })(), check._detail);
 check('fog setting restored', G2.U.uFogNear.value === 18, 'fogNear=' + G2.U.uFogNear.value);
+
+// ═══════════════════════════════════════════════════════════════════════════
+section('settings, missions and world reset');
+const farBefore = G.camera.far;
+const optRender = g.$('opt-render');
+optRender.value = '3';
+optRender.dispatchEvent(new window.Event('change'));
+check('render distance setting applies', G.S.renderRadius === 3 &&
+  G.camera.far === Math.max(160, 3 * 16 + 90),
+  'radius=3 far=' + G.camera.far + ' (was ' + farBefore + ')');
+// Unloading uses a hysteresis margin of R+2, so dropping 5 -> 3 legitimately
+// removes nothing (the R=5 selection never exceeds Chebyshev 5). Test the
+// invariant, and use a radius where the margin actually bites.
+const chunksAtR5 = G.world.chunks.size;
+step(30);
+check('radius 3 keeps every chunk inside the unload margin', (() => {
+  const cx = Math.floor(G.player.position.x / CHUNK), cz = Math.floor(G.player.position.z / CHUNK);
+  let beyond = 0;
+  for (const ch of G.world.chunks.values())
+    if (Math.max(Math.abs(ch.cx - cx), Math.abs(ch.cz - cz)) > 3 + 2) beyond++;
+  return beyond === 0;
+})(), G.world.chunks.size + ' chunks');
+optRender.value = '2';
+optRender.dispatchEvent(new window.Event('change'));
+step(30);
+const cx2 = Math.floor(G.player.position.x / CHUNK), cz2 = Math.floor(G.player.position.z / CHUNK);
+let beyond2 = 0;
+for (const ch of G.world.chunks.values())
+  if (Math.max(Math.abs(ch.cx - cx2), Math.abs(ch.cz - cz2)) > 2 + 2) beyond2++;
+check('radius 2 unloads the chunks beyond the margin', G.world.chunks.size < chunksAtR5 && beyond2 === 0,
+  chunksAtR5 + ' -> ' + G.world.chunks.size + ' chunks, ' + beyond2 + ' beyond R+2');
+
+// Missions are strictly ordered (checkMissions only looks at MISSIONS[S.mission]),
+// so satisfy the first two the way the game would and let a real mining burst
+// drive them.
+G.S.stats.iron = 5;
+G.S.stats.diamond = 1;
+G.S.pitch = -Math.PI / 2.2;                 // look straight down at loaded ground
+const missionBefore = G.S.mission, scoreBefore = G.S.score;
+key(window, 'KeyE');                        // laser
+mouse(window, 'mousedown');
+step(30);
+mouse(window, 'mouseup');
+check('missions complete in order and pay out', G.S.mission >= missionBefore + 2 &&
+  /MISSION COMPLETE/.test(g.$('mt-title').textContent),
+  'mission ' + missionBefore + ' -> ' + G.S.mission + ' score +' + (G.S.score - scoreBefore) +
+  ' title="' + g.$('mt-title').textContent + '"');
+
+const resetX = G.player.position.x, resetZ = G.player.position.z;
+g.$('resetWorldBtn').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+check('reset world clears score, stats and the saved session',
+  G.S.score === 0 && G.S.destroyed === 0 && G.S.placed === 0 && G.S.mission === 0 &&
+  window.localStorage.getItem(saveKey) === null, 'score=' + G.S.score);
+step(6);
+check('reset world regenerates ground around the player, not the origin',
+  G.world.isLoaded(resetX, resetZ) && G.world.isSolid(Math.floor(resetX), 0, Math.floor(resetZ)),
+  'player x=' + Math.round(resetX) + ' loaded=' + G.world.isLoaded(resetX, resetZ));
+
+// ═══════════════════════════════════════════════════════════════════════════
+section("touch controls (a phone's only input scheme)");
+// IS_TOUCH is false in every other instance here, so initTouch() — and with it
+// the entire input scheme a phone gets — would otherwise never execute at all.
+const T = loadPage(4242, null, { touch: true });
+check('touch instance boots with no error', T.bootError === null, String(T.bootError && T.bootError.message));
+// The touch UI is shown by CSS (`body.touch #touch{display:block}`), so the
+// class on <body> is the thing that actually drives it.
+check('touch mode detected and the touch UI enabled',
+  T.window.document.body.classList.contains('touch') && !!T.$('touch') &&
+  /left stick/i.test(T.$('overlay-controls').innerHTML),
+  'body.touch=' + T.window.document.body.classList.contains('touch') +
+  ' hint="' + T.$('overlay-controls').textContent.slice(0, 30) + '"');
+
+const tG = T.window.__game;
+T.$('startBtn').dispatchEvent(new T.window.MouseEvent('click', { bubbles: true }));
+check('start resumes play without pointer lock', tG.S.paused === false && tG.S.started === true,
+  'paused=' + tG.S.paused + ' started=' + tG.S.started);
+
+function pointer(win, target, type, x, y, id) {
+  const ev = new win.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: 1 });
+  Object.defineProperty(ev, 'pointerId', { value: id === undefined ? 7 : id });
+  target.dispatchEvent(ev);
+  return ev;
+}
+const knob = T.window.document.querySelector('#stick .knob');
+const knobBefore = knob.style.transform;
+const stick = T.$('stick');
+pointer(T.window, stick, 'pointerdown', 0, 0);
+pointer(T.window, stick, 'pointermove', 0, -40);       // drag "up" = forward
+check('joystick drag moves the knob and sets a move vector',
+  knobBefore !== knob.style.transform && /-40px/.test(knob.style.transform),
+  'knob="' + knob.style.transform + '"');
+
+const tp0 = tG.player.position.clone();
+T.step(30);
+check('the joystick actually moves the player', tG.player.position.distanceTo(tp0) > 0.5,
+  'moved ' + tG.player.position.distanceTo(tp0).toFixed(2) + ' blocks');
+pointer(T.window, stick, 'pointerup', 0, -40);
+check('releasing the joystick recentres the knob', knob.style.transform === 'translate(0px,0px)',
+  'knob="' + knob.style.transform + '"');
+
+const pitch0 = tG.S.pitch;
+const lookArea = T.$('look-area');
+pointer(T.window, lookArea, 'pointerdown', 100, 100, 9);
+pointer(T.window, lookArea, 'pointermove', 100, 300, 9);
+check('dragging down the look area looks down', tG.S.pitch < pitch0 - 0.3,
+  pitch0.toFixed(2) + ' -> ' + tG.S.pitch.toFixed(2));
+pointer(T.window, lookArea, 'pointerup', 100, 300, 9);
+
+const flyBefore = tG.S.flying;
+pointer(T.window, T.$('tb-fly'), 'pointerdown', 0, 0);
+check('fly button toggles flight', tG.S.flying === !flyBefore && /Flying|Walking/.test(T.$('notice').textContent),
+  'flying=' + tG.S.flying + ' notice="' + T.$('notice').textContent + '"');
+
+tG.S.pitch = -Math.PI / 2.2;                  // aim at the ground below
+key(T.window, 'KeyE');
+const tMined = tG.S.destroyed;
+pointer(T.window, T.$('tb-fire'), 'pointerdown', 0, 0);
+T.step(40);
+check('fire button runs the selected power', tG.S.destroyed > tMined,
+  'destroyed ' + tMined + ' -> ' + tG.S.destroyed);
+pointer(T.window, T.$('tb-fire'), 'pointerup', 0, 0);
+
+const tPlaced = tG.S.placed;
+pointer(T.window, T.$('tb-place'), 'pointerdown', 0, 0);
+check('place button places a block', tG.S.placed === tPlaced + 1,
+  'placed ' + tPlaced + ' -> ' + tG.S.placed);
+
+const yBefore = tG.player.position.y;
+pointer(T.window, T.$('tb-jump'), 'pointerdown', 0, 0);
+T.step(12);
+pointer(T.window, T.$('tb-jump'), 'pointerup', 0, 0);
+check('jump button ascends while flying', tG.player.position.y > yBefore + 0.3,
+  'y ' + yBefore.toFixed(2) + ' -> ' + tG.player.position.y.toFixed(2));
+
+pointer(T.window, T.$('tb-pause'), 'pointerdown', 0, 0);
+check('pause button opens the pause menu', tG.S.paused === true &&
+  T.$('pause-menu').style.display === 'flex', 'paused=' + tG.S.paused +
+  ' display=' + T.$('pause-menu').style.display);
 
 // ═══════════════════════════════════════════════════════════════════════════
 section('shaders (GLSL syntax)');
